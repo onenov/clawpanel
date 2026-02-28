@@ -194,3 +194,77 @@ pub fn get_clawapp_status() -> Result<Value, String> {
     result.insert("url".into(), Value::String("http://localhost:3210".into()));
     Ok(Value::Object(result))
 }
+
+/// 一键安装 cftunnel
+#[tauri::command]
+pub async fn install_cftunnel(app: tauri::AppHandle) -> Result<String, String> {
+    use std::process::Stdio;
+    use std::io::{BufRead, BufReader};
+    use tauri::Emitter;
+
+    let _ = app.emit("install-log", "开始安装 cftunnel...");
+    let _ = app.emit("install-progress", 10);
+
+    // 下载并安装脚本
+    let install_script = r#"
+#!/bin/bash
+set -e
+cd /tmp
+echo "下载 cftunnel..."
+curl -fsSL https://raw.githubusercontent.com/qingchencloud/cftunnel/main/install.sh -o cftunnel-install.sh
+chmod +x cftunnel-install.sh
+echo "执行安装..."
+./cftunnel-install.sh
+echo "安装完成"
+"#;
+
+    let _ = app.emit("install-log", "下载安装脚本...");
+    let _ = app.emit("install-progress", 30);
+
+    let mut child = Command::new("bash")
+        .arg("-c")
+        .arg(install_script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动安装进程失败: {e}"))?;
+
+    let stderr = child.stderr.take();
+    let stdout = child.stdout.take();
+
+    // 读取 stderr
+    let app2 = app.clone();
+    let handle = std::thread::spawn(move || {
+        if let Some(pipe) = stderr {
+            for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                let _ = app2.emit("install-log", &line);
+            }
+        }
+    });
+
+    // 读取 stdout
+    let mut progress = 40;
+    if let Some(pipe) = stdout {
+        for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+            let _ = app.emit("install-log", &line);
+            if progress < 90 {
+                progress += 5;
+                let _ = app.emit("install-progress", progress);
+            }
+        }
+    }
+
+    let _ = handle.join();
+    let _ = app.emit("install-progress", 95);
+
+    let status = child.wait().map_err(|e| format!("等待安装进程失败: {e}"))?;
+    let _ = app.emit("install-progress", 100);
+
+    if !status.success() {
+        let _ = app.emit("install-log", "❌ 安装失败");
+        return Err("安装失败，请查看日志".into());
+    }
+
+    let _ = app.emit("install-log", "✅ cftunnel 安装成功");
+    Ok("安装成功".into())
+}

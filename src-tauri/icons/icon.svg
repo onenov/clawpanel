@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#4f46e5;stop-opacity:1" />
+    </linearGradient>
+    <filter id="shadow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8"/>
+      <feOffset dx="0" dy="4" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.3"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- 背景圆形 -->
+  <circle cx="256" cy="256" r="240" fill="url(#grad1)" filter="url(#shadow)"/>
+  
+  <!-- 爪印主体 - 中心大圆 -->
+  <ellipse cx="256" cy="280" rx="70" ry="85" fill="white" opacity="0.95"/>
+  
+  <!-- 四个爪尖 -->
+  <!-- 左上 -->
+  <ellipse cx="160" cy="180" rx="35" ry="55" fill="white" opacity="0.95" 
+           transform="rotate(-25 160 180)"/>
+  <!-- 左下 -->
+  <ellipse cx="180" cy="360" rx="35" ry="55" fill="white" opacity="0.95" 
+           transform="rotate(15 180 360)"/>
+  <!-- 右上 -->
+  <ellipse cx="352" cy="180" rx="35" ry="55" fill="white" opacity="0.95" 
+           transform="rotate(25 352 180)"/>
+  <!-- 右下 -->
+  <ellipse cx="332" cy="360" rx="35" ry="55" fill="white" opacity="0.95" 
+           transform="rotate(-15 332 360)"/>
+  
+  <!-- 面板网格装饰（科技感） -->
+  <g opacity="0.15" stroke="white" stroke-width="2" fill="none">
+    <line x1="256" y1="80" x2="256" y2="432"/>
+    <line x1="80" y1="256" x2="432" y2="256"/>
+    <circle cx="256" cy="256" r="120"/>
+    <circle cx="256" cy="256" r="180"/>
+  </g>
+</svg>

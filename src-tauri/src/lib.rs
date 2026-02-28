@@ -46,6 +46,7 @@ pub fn run() {
             extensions::cftunnel_action,
             extensions::get_cftunnel_logs,
             extensions::get_clawapp_status,
+            extensions::install_cftunnel,
         ])
         .run(tauri::generate_context!())
         .expect("启动 ClawPanel 失败");

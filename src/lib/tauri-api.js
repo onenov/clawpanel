@@ -178,4 +178,5 @@ export const api = {
   cftunnelAction: (action) => invoke('cftunnel_action', { action }),
   getCftunnelLogs: (lines = 20) => invoke('get_cftunnel_logs', { lines }),
   getClawappStatus: () => invoke('get_clawapp_status'),
+  installCftunnel: () => invoke('install_cftunnel'),
 }

@@ -63,8 +63,12 @@ async function loadCftunnel(page) {
 function renderCftunnel(el, s) {
   if (!s.installed) {
     el.innerHTML = `
-      <div style="color:var(--text-tertiary)">cftunnel 未安装</div>
-      <a class="btn btn-primary btn-sm" href="https://github.com/qingchencloud/cftunnel" target="_blank" rel="noopener" style="margin-top:var(--space-md)">前往安装</a>
+      <div style="color:var(--text-tertiary);margin-bottom:var(--space-md)">cftunnel 未安装</div>
+      <div style="display:flex;gap:var(--space-sm);align-items:center">
+        <button class="btn btn-primary btn-sm" data-action="install-cftunnel">一键安装</button>
+        <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/cftunnel" target="_blank" rel="noopener">查看文档</a>
+      </div>
+      <div id="install-progress-area"></div>
     `
     return
   }
@@ -199,6 +203,9 @@ function bindEvents(page) {
       case 'clawapp-refresh':
         await loadClawapp(page)
         break
+      case 'install-cftunnel':
+        await handleInstallCftunnel(page)
+        break
     }
   })
 }
@@ -236,5 +243,60 @@ async function handleCftunnelLogs(page) {
     `
   } catch (e) {
     area.innerHTML = `<div style="color:var(--error);margin-top:var(--space-sm)">读取日志失败: ${e}</div>`
+  }
+}
+
+async function handleInstallCftunnel(page) {
+  const area = page.querySelector('#install-progress-area')
+  if (!area) return
+
+  // 显示进度条
+  area.innerHTML = `
+    <div style="margin-top:var(--space-lg)">
+      <div class="upgrade-progress-wrap">
+        <div class="upgrade-progress-bar">
+          <div class="upgrade-progress-fill" id="install-progress-fill" style="width:0%"></div>
+        </div>
+        <div class="upgrade-progress-text" id="install-progress-text">准备安装...</div>
+      </div>
+      <div class="upgrade-log-box" id="install-log-box"></div>
+    </div>
+  `
+
+  const progressFill = area.querySelector('#install-progress-fill')
+  const progressText = area.querySelector('#install-progress-text')
+  const logBox = area.querySelector('#install-log-box')
+
+  let unlistenLog, unlistenProgress
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+
+    unlistenLog = await listen('install-log', (e) => {
+      logBox.textContent += e.payload + '\n'
+      logBox.scrollTop = logBox.scrollHeight
+    })
+
+    unlistenProgress = await listen('install-progress', (e) => {
+      const progress = e.payload
+      progressFill.style.width = progress + '%'
+      progressText.textContent = `安装中... ${progress}%`
+    })
+
+    await api.installCftunnel()
+
+    progressFill.classList.add('done')
+    progressText.textContent = '✅ 安装完成'
+    toast('cftunnel 安装成功', 'success')
+
+    // 3 秒后刷新状态
+    setTimeout(() => loadCftunnel(page), 3000)
+  } catch (e) {
+    progressFill.classList.add('error')
+    progressText.textContent = '❌ 安装失败'
+    logBox.textContent += '\n错误: ' + e
+    toast('安装失败: ' + e, 'error')
+  } finally {
+    unlistenLog?.()
+    unlistenProgress?.()
   }
 }
