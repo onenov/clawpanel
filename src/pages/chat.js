@@ -155,6 +155,8 @@ function bindEvents(page) {
   // 文件上传
   page.querySelector('#chat-attach-btn').addEventListener('click', () => _fileInputEl.click())
   _fileInputEl.addEventListener('change', handleFileSelect)
+  // 粘贴图片（Ctrl+V）
+  _textarea.addEventListener('paste', handlePaste)
 
   _messagesEl.addEventListener('scroll', () => {
     const { scrollTop, scrollHeight, clientHeight } = _messagesEl
@@ -196,13 +198,31 @@ async function handleFileSelect(e) {
   _fileInputEl.value = ''
 }
 
+async function handlePaste(e) {
+  const items = Array.from(e.clipboardData?.items || [])
+  const imageItems = items.filter(item => item.type.startsWith('image/'))
+  if (!imageItems.length) return
+  e.preventDefault()
+  for (const item of imageItems) {
+    const file = item.getAsFile()
+    if (!file) continue
+    if (file.size > 5 * 1024 * 1024) { toast('粘贴的图片超过 5MB 限制', 'warning'); continue }
+    try {
+      const base64 = await fileToBase64(file)
+      _attachments.push({ type: 'image', mimeType: file.type || 'image/png', fileName: `paste-${Date.now()}.png`, content: base64 })
+      renderAttachments()
+    } catch (_) { toast('读取粘贴图片失败', 'error') }
+  }
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => {
       const dataUrl = reader.result
-      const base64 = dataUrl.split(',')[1]
-      resolve(base64)
+      const match = /^data:[^;]+;base64,(.+)$/.exec(dataUrl)
+      if (!match) { reject(new Error('无效的数据 URL')); return }
+      resolve(match[1])
     }
     reader.onerror = reject
     reader.readAsDataURL(file)
@@ -229,6 +249,7 @@ function renderAttachments() {
       renderAttachments()
     })
   })
+  updateSendState()
 }
 
 // ── Gateway 连接 ──
@@ -829,7 +850,7 @@ function updateSendState() {
     _sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
     _sendBtn.title = '停止生成'
   } else {
-    _sendBtn.disabled = !_textarea.value.trim()
+    _sendBtn.disabled = !_textarea.value.trim() && !_attachments.length
     _sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'
     _sendBtn.title = '发送'
   }
