@@ -34,8 +34,23 @@ export async function render() {
   return page
 }
 
+function renderSkeleton(container) {
+  const item = () => `
+    <div class="agent-card" style="pointer-events:none">
+      <div class="agent-card-header">
+        <div class="skeleton" style="width:40px;height:40px;border-radius:50%"></div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+          <div class="skeleton" style="width:45%;height:16px;border-radius:4px"></div>
+          <div class="skeleton" style="width:60%;height:12px;border-radius:4px"></div>
+        </div>
+      </div>
+    </div>`
+  container.innerHTML = [item(), item(), item()].join('')
+}
+
 async function loadAgents(page, state) {
   const container = page.querySelector('#agents-list')
+  renderSkeleton(container)
   try {
     state.agents = await api.listAgents()
     renderAgents(page, state)

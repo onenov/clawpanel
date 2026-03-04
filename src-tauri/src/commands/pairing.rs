@@ -47,8 +47,32 @@ pub fn auto_pair_device() -> Result<String, String> {
     // 无论是否已配对，都确保 gateway.controlUi.allowedOrigins 已写入
     patch_gateway_origins();
 
-    // 检查设备是否已配对
-    if paired.get(&device_id).is_some() {
+    let os_platform = std::env::consts::OS; // "windows" | "macos" | "linux"
+
+    // 如果已配对，档查 platform 字段是否正确；不正确则覆盖更新，
+    // 避免 Gateway 因 metadata-upgrade 拒绝静默自动配对
+    if let Some(existing) = paired.get_mut(&device_id) {
+        let current_platform = existing
+            .get("platform")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if current_platform != os_platform {
+            if let Some(obj) = existing.as_object_mut() {
+                obj.insert(
+                    "platform".to_string(),
+                    serde_json::Value::String(os_platform.to_string()),
+                );
+                obj.insert(
+                    "deviceFamily".to_string(),
+                    serde_json::Value::String("desktop".to_string()),
+                );
+            }
+            let new_content = serde_json::to_string_pretty(&paired)
+                .map_err(|e| format!("序列化 paired.json 失败: {e}"))?;
+            std::fs::write(&paired_path, new_content)
+                .map_err(|e| format!("更新 paired.json 失败: {e}"))?;
+            return Ok("设备已配对（已修正平台字段）".into());
+        }
         return Ok("设备已配对".into());
     }
 
@@ -61,7 +85,8 @@ pub fn auto_pair_device() -> Result<String, String> {
     paired[&device_id] = serde_json::json!({
         "deviceId": device_id,
         "publicKey": public_key,
-        "platform": "desktop",
+        "platform": os_platform,
+        "deviceFamily": "desktop",
         "clientId": "openclaw-control-ui",
         "clientMode": "ui",
         "role": "operator",
