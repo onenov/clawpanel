@@ -49,10 +49,7 @@ function cachedInvoke(cmd, args = {}, ttl = CACHE_TTL) {
     logRequest(cmd, args, 0, true)
     return Promise.resolve(cached.val)
   }
-  const start = Date.now()
   return invoke(cmd, args).then(val => {
-    const duration = Date.now() - start
-    logRequest(cmd, args, duration, false)
     _cache.set(key, { val, ts: Date.now() })
     return val
   })
@@ -64,6 +61,9 @@ function invalidate(...cmds) {
     if (cmds.some(c => k.startsWith(c))) _cache.delete(k)
   }
 }
+
+// 导出 invalidate 供外部使用
+export { invalidate }
 
 async function invoke(cmd, args = {}) {
   const start = Date.now()
@@ -164,6 +164,10 @@ function mockInvoke(cmd, args) {
     stop_service: () => true,
     restart_service: () => true,
     reload_gateway: () => 'Gateway 已重载',
+    restart_gateway: () => 'Gateway 已重启',
+    list_agents: () => [
+      { id: 'main', isDefault: true, identityName: null, model: null, workspace: null },
+    ],
     upgrade_openclaw: () => '升级成功，当前版本: 2026.2.26-zh.3 (mock)',
     install_gateway: () => 'Gateway 服务已安装 (mock)',
     uninstall_gateway: () => 'Gateway 服务已卸载 (mock)',
@@ -211,6 +215,7 @@ export const api = {
   readMcpConfig: () => cachedInvoke('read_mcp_config'),
   writeMcpConfig: (config) => { invalidate('read_mcp_config'); return invoke('write_mcp_config', { config }) },
   reloadGateway: () => invoke('reload_gateway'),
+  restartGateway: () => invoke('restart_gateway'),
   upgradeOpenclaw: (source = 'chinese') => invoke('upgrade_openclaw', { source }),
   installGateway: () => invoke('install_gateway'),
   uninstallGateway: () => invoke('uninstall_gateway'),
@@ -224,6 +229,7 @@ export const api = {
   addAgent: (name, model, workspace) => { invalidate('list_agents'); return invoke('add_agent', { name, model, workspace: workspace || null }) },
   deleteAgent: (id) => { invalidate('list_agents'); return invoke('delete_agent', { id }) },
   updateAgentIdentity: (id, name, emoji) => { invalidate('list_agents'); return invoke('update_agent_identity', { id, name, emoji }) },
+  updateAgentModel: (id, model) => { invalidate('list_agents'); return invoke('update_agent_model', { id, model }) },
   backupAgent: (id) => invoke('backup_agent', { id }),
 
   // 日志（短缓存）
@@ -255,6 +261,7 @@ export const api = {
   getCftunnelLogs: (lines = 20) => cachedInvoke('get_cftunnel_logs', { lines }, 5000),
   getClawappStatus: () => cachedInvoke('get_clawapp_status', {}, 5000),
   installCftunnel: () => invoke('install_cftunnel'),
+  installClawapp: () => invoke('install_clawapp'),
 
   // 设备密钥 + Gateway 握手
   createConnectFrame: (nonce, gatewayToken) => invoke('create_connect_frame', { nonce, gatewayToken }),

@@ -92,9 +92,13 @@ pub fn create_connect_frame(nonce: String, gateway_token: String) -> Result<Valu
         .unwrap()
         .as_millis();
 
+    let platform = std::env::consts::OS; // "windows" | "macos" | "linux"
+    let device_family = "desktop";
+
     let scopes_str = SCOPES.join(",");
+    // v3 格式：v3|deviceId|clientId|clientMode|role|scopes|signedAt|token|nonce|platform|deviceFamily
     let payload_str = format!(
-        "v2|{device_id}|gateway-client|backend|operator|{scopes_str}|{signed_at}|{gateway_token}|{nonce}"
+        "v3|{device_id}|gateway-client|backend|operator|{scopes_str}|{signed_at}|{gateway_token}|{nonce}|{platform}|{device_family}"
     );
 
     let signature = signing_key.sign(payload_str.as_bytes());
@@ -110,7 +114,8 @@ pub fn create_connect_frame(nonce: String, gateway_token: String) -> Result<Valu
             "client": {
                 "id": "gateway-client",
                 "version": "1.0.0",
-                "platform": "desktop",
+                "platform": platform,
+                "deviceFamily": device_family,
                 "mode": "backend"
             },
             "role": "operator",

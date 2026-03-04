@@ -13,7 +13,7 @@ export async function render() {
       <h1 class="page-title">Gateway 配置</h1>
       <p class="page-desc">Gateway 是 AI 模型的统一入口，所有应用通过它来调用模型服务</p>
     </div>
-    <div id="gateway-config" class="loading-text">加载中...</div>
+    <div id="gateway-config"></div>
     <div class="gw-save-bar">
       <button class="btn btn-primary" id="btn-save-gw">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
@@ -42,7 +42,6 @@ export async function render() {
 
 async function loadConfig(page, state) {
   const el = page.querySelector('#gateway-config')
-  el.innerHTML = '<div class="loading-text">加载中...</div>'
   try {
     state.config = await api.readOpenclawConfig()
     renderConfig(page, state)
@@ -76,8 +75,8 @@ function renderConfig(page, state) {
         谁能访问
       </div>
       <div class="gw-option-cards">
-        <label class="gw-option-card ${gw.bind === 'all' ? '' : 'selected'}" data-bind="loopback">
-          <input type="radio" name="gw-bind" value="loopback" ${gw.bind === 'all' ? '' : 'checked'} hidden>
+        <label class="gw-option-card ${(gw.bind === 'lan' || gw.bind === 'all') ? '' : 'selected'}" data-bind="loopback">
+          <input type="radio" name="gw-bind" value="loopback" ${(gw.bind === 'lan' || gw.bind === 'all') ? '' : 'checked'} hidden>
           <div class="gw-option-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           </div>
@@ -86,8 +85,8 @@ function renderConfig(page, state) {
             <div class="gw-option-desc">只有这台电脑上的应用能访问，最安全</div>
           </div>
         </label>
-        <label class="gw-option-card ${gw.bind === 'all' ? 'selected' : ''}" data-bind="all">
-          <input type="radio" name="gw-bind" value="all" ${gw.bind === 'all' ? 'checked' : ''} hidden>
+        <label class="gw-option-card ${(gw.bind === 'lan' || gw.bind === 'all') ? 'selected' : ''}" data-bind="lan">
+          <input type="radio" name="gw-bind" value="lan" ${(gw.bind === 'lan' || gw.bind === 'all') ? 'checked' : ''} hidden>
           <div class="gw-option-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="6" width="7" height="10" rx="1"/><rect x="9" y="3" width="6" height="14" rx="1"/><rect x="16" y="6" width="7" height="10" rx="1"/><line x1="8" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="16" y2="12"/></svg>
           </div>

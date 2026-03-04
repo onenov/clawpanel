@@ -27,12 +27,12 @@ export async function render() {
     <div id="cftunnel-card" class="config-section">
       <div class="config-section-title">cftunnel 内网穿透</div>
       <div class="form-hint" style="margin-bottom:var(--space-md)">通过 Cloudflare Tunnel 将本地服务暴露到公网，无需公网 IP 和端口映射。</div>
-      <div id="cftunnel-content" class="loading-text">加载中...</div>
+      <div id="cftunnel-content"></div>
     </div>
     <div id="clawapp-card" class="config-section">
       <div class="config-section-title">ClawApp 移动客户端</div>
       <div class="form-hint" style="margin-bottom:var(--space-md)">基于 LobeChat 的 AI 对话客户端，通过 Gateway 连接模型服务。支持本地和外网访问。</div>
-      <div id="clawapp-content" class="loading-text">加载中...</div>
+      <div id="clawapp-content"></div>
     </div>
   `
 
@@ -52,7 +52,6 @@ async function loadAll(page) {
 
 async function loadCftunnel(page) {
   const el = page.querySelector('#cftunnel-content')
-  el.innerHTML = '<div class="loading-text">加载中...</div>'
   try {
     const status = await api.getCftunnelStatus()
     renderCftunnel(el, status)
@@ -146,7 +145,6 @@ function renderRoutes(routes) {
 
 async function loadClawapp(page) {
   const el = page.querySelector('#clawapp-content')
-  el.innerHTML = '<div class="loading-text">加载中...</div>'
   try {
     const status = await api.getClawappStatus()
     renderClawapp(el, status)
@@ -156,6 +154,18 @@ async function loadClawapp(page) {
 }
 
 function renderClawapp(el, s) {
+  if (!s.installed) {
+    el.innerHTML = `
+      <div style="color:var(--text-tertiary);margin-bottom:var(--space-md)">ClawApp 未安装</div>
+      <div style="display:flex;gap:var(--space-sm);align-items:center">
+        <button class="btn btn-primary btn-sm" data-action="install-clawapp">一键安装</button>
+        <a class="btn btn-secondary btn-sm" href="https://github.com/qingchencloud/clawapp" target="_blank" rel="noopener">查看文档</a>
+      </div>
+      <div id="install-clawapp-progress-area"></div>
+    `
+    return
+  }
+
   const running = s.running
   el.innerHTML = `
     <div class="stat-cards" style="margin-bottom:var(--space-md)">
@@ -207,6 +217,9 @@ function bindEvents(page) {
         break
       case 'install-cftunnel':
         await handleInstallCftunnel(page)
+        break
+      case 'install-clawapp':
+        await handleInstallClawapp(page)
         break
     }
   })
@@ -292,6 +305,59 @@ async function handleInstallCftunnel(page) {
 
     // 3 秒后刷新状态
     setTimeout(() => loadCftunnel(page), 3000)
+  } catch (e) {
+    progressFill.classList.add('error')
+    progressText.textContent = '❌ 安装失败'
+    logBox.textContent += '\n错误: ' + e
+    toast('安装失败: ' + e, 'error')
+  } finally {
+    unlistenLog?.()
+    unlistenProgress?.()
+  }
+}
+
+async function handleInstallClawapp(page) {
+  const area = page.querySelector('#install-clawapp-progress-area')
+  if (!area) return
+
+  area.innerHTML = `
+    <div style="margin-top:var(--space-lg)">
+      <div class="upgrade-progress-wrap">
+        <div class="upgrade-progress-bar">
+          <div class="upgrade-progress-fill" id="install-clawapp-progress-fill" style="width:0%"></div>
+        </div>
+        <div class="upgrade-progress-text" id="install-clawapp-progress-text">准备安装...</div>
+      </div>
+      <div class="upgrade-log-box" id="install-clawapp-log-box"></div>
+    </div>
+  `
+
+  const progressFill = area.querySelector('#install-clawapp-progress-fill')
+  const progressText = area.querySelector('#install-clawapp-progress-text')
+  const logBox = area.querySelector('#install-clawapp-log-box')
+
+  let unlistenLog, unlistenProgress
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+
+    unlistenLog = await listen('install-log', (e) => {
+      logBox.textContent += e.payload + '\n'
+      logBox.scrollTop = logBox.scrollHeight
+    })
+
+    unlistenProgress = await listen('install-progress', (e) => {
+      const progress = e.payload
+      progressFill.style.width = progress + '%'
+      progressText.textContent = `安装中... ${progress}%`
+    })
+
+    await api.installClawapp()
+
+    progressFill.classList.add('done')
+    progressText.textContent = '✅ 安装完成'
+    toast('ClawApp 安装成功', 'success')
+
+    setTimeout(() => loadClawapp(page), 3000)
   } catch (e) {
     progressFill.classList.add('error')
     progressText.textContent = '❌ 安装失败'

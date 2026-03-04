@@ -4,20 +4,35 @@ use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
+/// 按第一个冒号（半角 ':' 或全角 '：'）分割，返回冒号之后的内容（trim 后）
+fn split_after_colon(s: &str) -> &str {
+    // 半角冒号是 1 字节，全角冒号是 3 字节（UTF-8: \xef\xbc\x9a）
+    if let Some(pos) = s.find(':') {
+        return s[pos + 1..].trim();
+    }
+    if let Some(pos) = s.find('：') {
+        return s[pos + '：'.len_utf8()..].trim();
+    }
+    ""
+}
+
 /// 解析 cftunnel status 输出
 fn parse_cftunnel_status(output: &str) -> serde_json::Map<String, Value> {
     let mut map = serde_json::Map::new();
     for line in output.lines() {
         let line = line.trim();
         if line.starts_with("隧道:") || line.starts_with("隧道：") {
-            let rest = line.splitn(2, ':').nth(1).unwrap_or("").trim();
+            let rest = split_after_colon(line);
             let name = rest.split('(').next().unwrap_or(rest).trim();
             map.insert("tunnel_name".into(), Value::String(name.to_string()));
         } else if line.starts_with("状态:") || line.starts_with("状态：") {
-            let rest = line.splitn(2, ':').nth(1).unwrap_or("").trim();
+            let rest = split_after_colon(line);
             let running = rest.contains("运行中");
             map.insert("running".into(), Value::Bool(running));
-            if let Some(pid_str) = rest.split("PID:").nth(1) {
+            // 匹配英文和全角 'PID:' / 'PID：'
+            let pid_rest = rest.split("PID:").nth(1)
+                .or_else(|| rest.split("PID：").nth(1));
+            if let Some(pid_str) = pid_rest {
                 let pid = pid_str.trim().trim_end_matches(')').trim();
                 if let Ok(p) = pid.parse::<u64>() {
                     map.insert("pid".into(), Value::Number(p.into()));
@@ -228,6 +243,10 @@ pub fn get_cftunnel_logs(lines: Option<u32>) -> Result<String, String> {
 pub fn get_clawapp_status() -> Result<Value, String> {
     let mut result = serde_json::Map::new();
 
+    // 检测是否已安装（检查 npm 全局包）
+    let installed = check_clawapp_installed();
+    result.insert("installed".into(), Value::Bool(installed));
+
     // 跨平台方式：尝试连接端口检测是否在运行
     let running = std::net::TcpStream::connect_timeout(
         &"127.0.0.1:3210".parse().unwrap(),
@@ -257,6 +276,30 @@ pub fn get_clawapp_status() -> Result<Value, String> {
     result.insert("port".into(), Value::Number(3210.into()));
     result.insert("url".into(), Value::String("http://localhost:3210".into()));
     Ok(Value::Object(result))
+}
+
+/// 检测 ClawApp 是否已安装
+fn check_clawapp_installed() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/c", "npm", "list", "-g", "clawapp"]);
+        cmd.creation_flags(0x08000000);
+        if let Ok(out) = cmd.output() {
+            return out.status.success();
+        }
+        false
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(out) = Command::new("npm")
+            .args(["list", "-g", "clawapp"])
+            .output()
+        {
+            return out.status.success();
+        }
+        false
+    }
 }
 
 /// 一键安装 cftunnel
@@ -356,5 +399,77 @@ Write-Output '安装完成'
     }
 
     let _ = app.emit("install-log", "✅ cftunnel 安装成功");
+    Ok("安装成功".into())
+}
+
+/// 一键安装 ClawApp（通过 npm）
+#[tauri::command]
+pub async fn install_clawapp(app: tauri::AppHandle) -> Result<String, String> {
+    use std::process::Stdio;
+    use std::io::{BufRead, BufReader};
+    use tauri::Emitter;
+
+    let _ = app.emit("install-log", "开始安装 ClawApp...");
+    let _ = app.emit("install-progress", 10);
+
+    let _ = app.emit("install-log", "通过 npm 安装 clawapp...");
+    let _ = app.emit("install-progress", 30);
+
+    #[cfg(target_os = "windows")]
+    let mut child = {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/c", "npm", "install", "-g", "clawapp"]);
+        cmd.creation_flags(0x08000000);
+        cmd.stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("启动安装进程失败: {e}"))?
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let mut child = {
+        Command::new("npm")
+            .args(["install", "-g", "clawapp"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("启动安装进程失败: {e}"))?
+    };
+
+    let stderr = child.stderr.take();
+    let stdout = child.stdout.take();
+
+    let app2 = app.clone();
+    let handle = std::thread::spawn(move || {
+        if let Some(pipe) = stderr {
+            for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                let _ = app2.emit("install-log", &line);
+            }
+        }
+    });
+
+    let mut progress = 40;
+    if let Some(pipe) = stdout {
+        for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+            let _ = app.emit("install-log", &line);
+            if progress < 90 {
+                progress += 5;
+                let _ = app.emit("install-progress", progress);
+            }
+        }
+    }
+
+    let _ = handle.join();
+    let _ = app.emit("install-progress", 95);
+
+    let status = child.wait().map_err(|e| format!("等待安装进程失败: {e}"))?;
+    let _ = app.emit("install-progress", 100);
+
+    if !status.success() {
+        let _ = app.emit("install-log", "❌ 安装失败");
+        return Err("安装失败，请查看日志".into());
+    }
+
+    let _ = app.emit("install-log", "✅ ClawApp 安装成功");
     Ok("安装成功".into())
 }

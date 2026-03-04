@@ -39,12 +39,14 @@ const COMMANDS = [
 
 let _sessionKey = null, _page = null, _messagesEl = null, _textarea = null
 let _sendBtn = null, _statusDot = null, _typingEl = null, _scrollBtn = null
-let _sessionListEl = null, _cmdPanelEl = null
+let _sessionListEl = null, _cmdPanelEl = null, _attachPreviewEl = null, _fileInputEl = null
 let _currentAiBubble = null, _currentAiText = '', _currentRunId = null
 let _isStreaming = false, _isSending = false, _messageQueue = []
 let _lastRenderTime = 0, _renderPending = false, _lastHistoryHash = ''
 let _streamSafetyTimer = null, _unsubEvent = null, _unsubReady = null, _unsubStatus = null
 let _pageActive = false
+let _errorTimer = null, _lastErrorMsg = null
+let _attachments = []
 
 export async function render() {
   const page = document.createElement('div')
@@ -87,7 +89,12 @@ export async function render() {
       </div>
       <button class="chat-scroll-btn" id="chat-scroll-btn" style="display:none">↓</button>
       <div class="chat-cmd-panel" id="chat-cmd-panel" style="display:none"></div>
+      <div class="chat-attachments-preview" id="chat-attachments-preview" style="display:none"></div>
       <div class="chat-input-area">
+        <input type="file" id="chat-file-input" accept="image/*" multiple style="display:none">
+        <button class="chat-attach-btn" id="chat-attach-btn" title="上传图片">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+        </button>
         <div class="chat-input-wrapper">
           <textarea id="chat-input" rows="1" placeholder="输入消息，Enter 发送，/ 打开指令"></textarea>
         </div>
@@ -107,6 +114,8 @@ export async function render() {
   _scrollBtn = page.querySelector('#chat-scroll-btn')
   _sessionListEl = page.querySelector('#chat-session-list')
   _cmdPanelEl = page.querySelector('#chat-cmd-panel')
+  _attachPreviewEl = page.querySelector('#chat-attachments-preview')
+  _fileInputEl = page.querySelector('#chat-file-input')
 
   bindEvents(page)
   // 非阻塞：先返回 DOM，后台连接 Gateway
@@ -140,8 +149,12 @@ function bindEvents(page) {
     page.querySelector('#chat-sidebar').classList.toggle('open')
   })
   page.querySelector('#btn-new-session').addEventListener('click', () => showNewSessionDialog())
-page.querySelector('#btn-cmd').addEventListener('click', () => toggleCmdPanel())
+  page.querySelector('#btn-cmd').addEventListener('click', () => toggleCmdPanel())
   page.querySelector('#btn-reset-session').addEventListener('click', () => resetCurrentSession())
+
+  // 文件上传
+  page.querySelector('#chat-attach-btn').addEventListener('click', () => _fileInputEl.click())
+  _fileInputEl.addEventListener('change', handleFileSelect)
 
   _messagesEl.addEventListener('scroll', () => {
     const { scrollTop, scrollHeight, clientHeight } = _messagesEl
@@ -149,6 +162,73 @@ page.querySelector('#btn-cmd').addEventListener('click', () => toggleCmdPanel())
   })
   _scrollBtn.addEventListener('click', () => scrollToBottom())
   _messagesEl.addEventListener('click', () => hideCmdPanel())
+}
+
+// ── 文件上传 ──
+
+async function handleFileSelect(e) {
+  const files = Array.from(e.target.files || [])
+  if (!files.length) return
+
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) {
+      toast('仅支持图片文件', 'warning')
+      continue
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast(`${file.name} 超过 5MB 限制`, 'warning')
+      continue
+    }
+
+    try {
+      const base64 = await fileToBase64(file)
+      _attachments.push({
+        type: 'image',
+        mimeType: file.type,
+        fileName: file.name,
+        content: base64,
+      })
+      renderAttachments()
+    } catch (e) {
+      toast(`读取 ${file.name} 失败`, 'error')
+    }
+  }
+  _fileInputEl.value = ''
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result
+      const base64 = dataUrl.split(',')[1]
+      resolve(base64)
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+function renderAttachments() {
+  if (!_attachments.length) {
+    _attachPreviewEl.style.display = 'none'
+    return
+  }
+  _attachPreviewEl.style.display = 'flex'
+  _attachPreviewEl.innerHTML = _attachments.map((att, idx) => `
+    <div class="chat-attachment-item">
+      <img src="data:${att.mimeType};base64,${att.content}" alt="${att.fileName}">
+      <button class="chat-attachment-del" data-idx="${idx}">×</button>
+    </div>
+  `).join('')
+
+  _attachPreviewEl.querySelectorAll('.chat-attachment-del').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx)
+      _attachments.splice(idx, 1)
+      renderAttachments()
+    })
+  })
 }
 
 // ── Gateway 连接 ──
@@ -175,14 +255,16 @@ async function connectGateway() {
     _unsubReady = wsClient.onReady((hello, sessionKey, err) => {
       if (!_pageActive) return
       if (err?.error) { toast(err.message || '连接失败', 'error'); return }
+      showTyping(false)  // Gateway 就绪后关闭加载动画
       // 重连后恢复：保留当前 sessionKey，不重复加载历史
       if (!_sessionKey) {
         const saved = localStorage.getItem(STORAGE_SESSION_KEY)
         _sessionKey = saved || sessionKey
         updateSessionTitle()
         loadHistory()
-        refreshSessionList()
       }
+      // 始终刷新会话列表（无论是否有 sessionKey）
+      refreshSessionList()
     })
 
     _unsubEvent = wsClient.onEvent((msg) => {
@@ -195,6 +277,7 @@ async function connectGateway() {
       const saved = localStorage.getItem(STORAGE_SESSION_KEY)
       _sessionKey = saved || wsClient.sessionKey
       updateStatusDot('ready')
+      showTyping(false)  // 确保关闭加载动画
       updateSessionTitle()
       loadHistory()
       refreshSessionList()
@@ -278,23 +361,18 @@ function switchSession(newKey) {
 
 async function showNewSessionDialog() {
   const defaultAgent = wsClient.snapshot?.sessionDefaults?.defaultAgentId || 'main'
-  // 获取 agent 列表
-  let agents = []
-  try {
-    agents = await api.listAgents()
-  } catch { agents = [{ id: 'main', identityName: '默认', isDefault: true }] }
 
-  const agentOptions = agents.map(a => ({
-    value: a.id,
-    label: `${a.id}${a.isDefault ? ' (默认)' : ''}${a.identityName ? ' — ' + a.identityName.split(',')[0] : ''}`
-  }))
-  agentOptions.push({ value: '__new__', label: '+ 新建 Agent' })
+  // 先用默认选项立即显示弹窗
+  const initialOptions = [
+    { value: 'main', label: 'main (默认)' },
+    { value: '__new__', label: '+ 新建 Agent' }
+  ]
 
   showModal({
     title: '新建会话',
     fields: [
       { name: 'name', label: '会话名称', value: '', placeholder: '例如：翻译助手' },
-      { name: 'agent', label: '智能体', type: 'select', value: defaultAgent, options: agentOptions },
+      { name: 'agent', label: '智能体', type: 'select', value: defaultAgent, options: initialOptions },
     ],
     onConfirm: (result) => {
       const name = (result.name || '').trim()
@@ -309,6 +387,27 @@ async function showNewSessionDialog() {
       toast('会话已创建', 'success')
     }
   })
+
+  // 异步加载完整 Agent 列表并更新下拉框
+  try {
+    const agents = await api.listAgents()
+    const agentOptions = agents.map(a => ({
+      value: a.id,
+      label: `${a.id}${a.isDefault ? ' (默认)' : ''}${a.identityName ? ' — ' + a.identityName.split(',')[0] : ''}`
+    }))
+    agentOptions.push({ value: '__new__', label: '+ 新建 Agent' })
+
+    // 更新弹窗中的下拉框选项
+    const selectEl = document.querySelector('.modal-overlay [data-name="agent"]')
+    if (selectEl) {
+      const currentValue = selectEl.value
+      selectEl.innerHTML = agentOptions.map(o =>
+        `<option value="${o.value}" ${o.value === currentValue ? 'selected' : ''}>${o.label}</option>`
+      ).join('')
+    }
+  } catch (e) {
+    console.warn('[chat] 加载 Agent 列表失败:', e)
+  }
 }
 
 async function deleteSession(key) {
@@ -389,22 +488,25 @@ function toggleCmdPanel() {
 
 function sendMessage() {
   const text = _textarea.value.trim()
-  if (!text) return
+  if (!text && !_attachments.length) return
   hideCmdPanel()
   _textarea.value = ''
   _textarea.style.height = 'auto'
   updateSendState()
-  if (_isSending || _isStreaming) { _messageQueue.push(text); return }
-  doSend(text)
+  const attachments = [..._attachments]
+  _attachments = []
+  renderAttachments()
+  if (_isSending || _isStreaming) { _messageQueue.push({ text, attachments }); return }
+  doSend(text, attachments)
 }
 
-async function doSend(text) {
-  appendUserMessage(text)
+async function doSend(text, attachments = []) {
+  appendUserMessage(text, attachments)
   saveMessage({ id: uuid(), sessionKey: _sessionKey, role: 'user', content: text, timestamp: Date.now() })
   showTyping(true)
   _isSending = true
   try {
-    await wsClient.chatSend(_sessionKey, text)
+    await wsClient.chatSend(_sessionKey, text, attachments.length ? attachments : undefined)
   } catch (err) {
     showTyping(false)
     appendSystemMessage('发送失败: ' + err.message)
@@ -416,7 +518,9 @@ async function doSend(text) {
 
 function processMessageQueue() {
   if (_messageQueue.length === 0 || _isSending || _isStreaming) return
-  doSend(_messageQueue.shift())
+  const msg = _messageQueue.shift()
+  if (typeof msg === 'string') doSend(msg, [])
+  else doSend(msg.text, msg.attachments || [])
 }
 
 function stopGeneration() {
@@ -442,7 +546,12 @@ function handleChatEvent(payload) {
     const c = extractChatContent(payload.message)
     if (c?.text && c.text.length > _currentAiText.length) {
       showTyping(false)
-      if (!_currentAiBubble) { _currentAiBubble = createStreamBubble(); _currentRunId = payload.runId }
+      if (!_currentAiBubble) {
+        _currentAiBubble = createStreamBubble()
+        _currentRunId = payload.runId
+        _isStreaming = true
+        updateSendState()
+      }
       _currentAiText = c.text
       throttledRender()
     }
@@ -484,10 +593,22 @@ function handleChatEvent(payload) {
 
   if (state === 'error') {
     const errMsg = payload.errorMessage || payload.error?.message || '未知错误'
-    if (_isStreaming) {
-      console.warn('[chat] 流式中临时错误，等待重试:', errMsg)
+
+    // 防抖：如果是相同错误且在 2 秒内，忽略（避免重复显示）
+    const now = Date.now()
+    if (_lastErrorMsg === errMsg && _errorTimer && (now - _errorTimer < 2000)) {
+      console.warn('[chat] 忽略重复错误:', errMsg)
       return
     }
+    _lastErrorMsg = errMsg
+    _errorTimer = now
+
+    // 如果正在流式输出，说明消息已经部分成功，不显示错误
+    if (_isStreaming || _currentAiBubble) {
+      console.warn('[chat] 流式中收到错误，但消息已部分成功，忽略错误提示:', errMsg)
+      return
+    }
+
     showTyping(false)
     appendSystemMessage('错误: ' + errMsg)
     resetStreamState()
@@ -561,6 +682,8 @@ function resetStreamState() {
   _currentAiText = ''
   _currentRunId = null
   _isStreaming = false
+  _lastErrorMsg = null
+  _errorTimer = null
   showTyping(false)
   updateSendState()
 }
@@ -637,12 +760,30 @@ function extractContent(msg) {
 
 // ── DOM 操作 ──
 
-function appendUserMessage(text) {
+function appendUserMessage(text, attachments = []) {
   const wrap = document.createElement('div')
   wrap.className = 'msg msg-user'
   const bubble = document.createElement('div')
   bubble.className = 'msg-bubble'
-  bubble.textContent = text
+
+  if (attachments.length > 0) {
+    const imgContainer = document.createElement('div')
+    imgContainer.style.cssText = 'display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap'
+    attachments.forEach(att => {
+      const img = document.createElement('img')
+      img.src = `data:${att.mimeType};base64,${att.content}`
+      img.style.cssText = 'max-width:200px;max-height:200px;border-radius:4px'
+      imgContainer.appendChild(img)
+    })
+    bubble.appendChild(imgContainer)
+  }
+
+  if (text) {
+    const textNode = document.createElement('div')
+    textNode.textContent = text
+    bubble.appendChild(textNode)
+  }
+
   wrap.appendChild(bubble)
   _messagesEl.insertBefore(wrap, _typingEl)
   scrollToBottom()

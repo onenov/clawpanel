@@ -29,7 +29,7 @@ export async function render() {
     </div>
     <div class="config-section">
       <div class="config-section-title">最近日志</div>
-      <div class="log-viewer" id="recent-logs" style="max-height:300px"><div class="loading-text">加载中...</div></div>
+      <div class="log-viewer" id="recent-logs" style="max-height:300px"></div>
     </div>
   `
 

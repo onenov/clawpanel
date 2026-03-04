@@ -64,7 +64,7 @@ export async function render() {
     <div style="margin-bottom:var(--space-md)">
       <input class="form-input" id="model-search" placeholder="搜索模型（按 ID 或名称过滤）" style="max-width:360px">
     </div>
-    <div id="providers-list" class="loading-text">加载中...</div>
+    <div id="providers-list"></div>
   `
 
   const state = { config: null, search: '', undoStack: [] }
@@ -83,7 +83,6 @@ export async function render() {
 
 async function loadConfig(page, state) {
   const listEl = page.querySelector('#providers-list')
-  listEl.innerHTML = '<div class="loading-text">加载中...</div>'
   try {
     state.config = await api.readOpenclawConfig()
     renderDefaultBar(page, state)
@@ -360,8 +359,23 @@ async function doAutoSave(state) {
     const primary = getCurrentPrimary(state.config)
     if (primary) applyDefaultModel(state)
     await api.writeOpenclawConfig(state.config)
-    // Gateway 会自动检测配置变化并热重载，无需手动 kickstart
-    toast('已自动保存', 'success')
+
+    // 提示用户需要重启 Gateway
+    const restartBtn = document.createElement('button')
+    restartBtn.className = 'btn btn-sm btn-primary'
+    restartBtn.textContent = '立即重启'
+    restartBtn.style.marginLeft = '8px'
+    restartBtn.onclick = async () => {
+      try {
+        toast('正在重启 Gateway...', 'info')
+        await api.restartGateway()
+        toast('Gateway 重启成功', 'success')
+      } catch (e) {
+        toast('重启失败: ' + e.message, 'error')
+      }
+    }
+
+    toast('配置已保存，需要重启 Gateway 生效', 'warning', { action: restartBtn })
   } catch (e) {
     toast('自动保存失败: ' + e, 'error')
   }

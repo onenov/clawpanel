@@ -36,7 +36,7 @@ export async function render() {
         <div style="padding:0 var(--space-sm) var(--space-sm)">
           <button class="btn btn-sm btn-secondary" id="btn-export-zip" style="width:100%">打包下载全部</button>
         </div>
-        <div id="file-tree" class="loading-text">加载中...</div>
+        <div id="file-tree"></div>
       </div>
       <div class="memory-editor">
         <div class="editor-toolbar">
@@ -54,15 +54,18 @@ export async function render() {
 
   const state = { category: 'memory', currentPath: null, agentId: 'main' }
 
-  // 非阻塞加载 agent 列表，然后填充下拉框
+  // 先用默认选项填充下拉框，立即显示页面
+  const agentSelect = page.querySelector('#agent-select')
+  agentSelect.innerHTML = '<option value="main">main</option>'
+
+  // 异步加载 agent 列表并更新下拉框
   api.listAgents().then(agents => {
-    const select = page.querySelector('#agent-select')
-    if (!select) return
+    if (!agentSelect) return
     const options = agents.map(a => {
       const label = a.identityName ? a.identityName.split(',')[0].trim() : a.id
       return `<option value="${a.id}">${a.id}${a.id !== label ? ' — ' + label : ''}</option>`
     }).join('')
-    select.innerHTML = options
+    agentSelect.innerHTML = options
   }).catch(() => {})
 
   // Agent 切换
@@ -141,7 +144,6 @@ export async function render() {
 
 async function loadFiles(page, state) {
   const tree = page.querySelector('#file-tree')
-  tree.innerHTML = '<div style="color:var(--text-tertiary);padding:12px">加载中...</div>'
 
   try {
     const files = await api.listMemoryFiles(state.category, state.agentId)

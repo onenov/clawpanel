@@ -145,7 +145,7 @@ const PROJECTS = [
   {
     name: 'OpenClaw',
     desc: 'AI Agent 框架，支持多模型协作、工具调用、记忆管理',
-    url: 'https://github.com/openclaw-labs/openclaw',
+    url: 'https://github.com/openclaw/openclaw',
   },
   {
     name: 'ClawApp',

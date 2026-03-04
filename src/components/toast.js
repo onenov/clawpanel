@@ -12,11 +12,23 @@ function ensureContainer() {
   return _container
 }
 
-export function toast(message, type = 'info', duration = 3000) {
+export function toast(message, type = 'info', options = {}) {
+  const duration = options.duration || 3000
+  const action = options.action // 可选的操作按钮（DOM 元素）
+
   const container = ensureContainer()
   const el = document.createElement('div')
   el.className = `toast ${type}`
-  el.textContent = message
+
+  const textSpan = document.createElement('span')
+  textSpan.textContent = message
+  el.appendChild(textSpan)
+
+  // 如果有操作按钮，添加到 toast 中
+  if (action instanceof HTMLElement) {
+    el.appendChild(action)
+  }
+
   container.appendChild(el)
 
   setTimeout(() => {

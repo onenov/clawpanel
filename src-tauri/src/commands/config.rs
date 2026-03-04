@@ -51,8 +51,21 @@ pub fn read_openclaw_config() -> Result<Value, String> {
     let path = super::openclaw_dir().join("openclaw.json");
     let content = fs::read_to_string(&path)
         .map_err(|e| format!("读取配置失败: {e}"))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("解析 JSON 失败: {e}"))
+    let mut config: Value = serde_json::from_str(&content)
+        .map_err(|e| format!("解析 JSON 失败: {e}"))?;
+
+    // 自动清理 UI 专属字段，防止污染配置导致 CLI 启动失败
+    if has_ui_fields(&config) {
+        config = strip_ui_fields(config);
+        // 静默写回清理后的配置
+        let bak = super::openclaw_dir().join("openclaw.json.bak");
+        let _ = fs::copy(&path, &bak);
+        let json = serde_json::to_string_pretty(&config)
+            .map_err(|e| format!("序列化失败: {e}"))?;
+        let _ = fs::write(&path, json);
+    }
+
+    Ok(config)
 }
 
 #[tauri::command]
@@ -70,27 +83,25 @@ pub fn write_openclaw_config(config: Value) -> Result<(), String> {
         .map_err(|e| format!("写入失败: {e}"))
 }
 
-/// 递归清理 models 数组中的 UI 专属字段（lastTestAt, latency, testStatus, testError）
-/// 并为缺少 name 字段的模型自动补上 name = id
-fn strip_ui_fields(mut val: Value) -> Value {
-    if let Some(obj) = val.as_object_mut() {
-        // 递归处理 providers -> xxx -> models 数组
-        if let Some(models) = obj.get("models") {
-            if let Some(providers) = models.as_object() {
-                let mut new_models = providers.clone();
-                for (_key, provider) in new_models.iter_mut() {
-                    if let Some(pobj) = provider.as_object_mut() {
-                        if let Some(Value::Array(arr)) = pobj.get_mut("models") {
-                            for model in arr.iter_mut() {
-                                if let Some(mobj) = model.as_object_mut() {
-                                    mobj.remove("lastTestAt");
-                                    mobj.remove("latency");
-                                    mobj.remove("testStatus");
-                                    mobj.remove("testError");
-                                    // 补上 name 字段（CLI 要求）
-                                    if !mobj.contains_key("name") {
-                                        if let Some(id) = mobj.get("id").and_then(|v| v.as_str()) {
-                                            mobj.insert("name".into(), Value::String(id.to_string()));
+/// 检测配置中是否包含 UI 专属字段
+fn has_ui_fields(val: &Value) -> bool {
+    if let Some(obj) = val.as_object() {
+        if let Some(models_val) = obj.get("models") {
+            if let Some(models_obj) = models_val.as_object() {
+                if let Some(providers_val) = models_obj.get("providers") {
+                    if let Some(providers_obj) = providers_val.as_object() {
+                        for (_provider_name, provider_val) in providers_obj.iter() {
+                            if let Some(provider_obj) = provider_val.as_object() {
+                                if let Some(Value::Array(arr)) = provider_obj.get("models") {
+                                    for model in arr.iter() {
+                                        if let Some(mobj) = model.as_object() {
+                                            if mobj.contains_key("lastTestAt")
+                                                || mobj.contains_key("latency")
+                                                || mobj.contains_key("testStatus")
+                                                || mobj.contains_key("testError")
+                                            {
+                                                return true;
+                                            }
                                         }
                                     }
                                 }
@@ -98,7 +109,42 @@ fn strip_ui_fields(mut val: Value) -> Value {
                         }
                     }
                 }
-                obj.insert("models".into(), Value::Object(new_models));
+            }
+        }
+    }
+    false
+}
+
+/// 递归清理 models 数组中的 UI 专属字段（lastTestAt, latency, testStatus, testError）
+/// 并为缺少 name 字段的模型自动补上 name = id
+fn strip_ui_fields(mut val: Value) -> Value {
+    if let Some(obj) = val.as_object_mut() {
+        // 处理 models.providers.xxx.models 结构
+        if let Some(models_val) = obj.get_mut("models") {
+            if let Some(models_obj) = models_val.as_object_mut() {
+                if let Some(providers_val) = models_obj.get_mut("providers") {
+                    if let Some(providers_obj) = providers_val.as_object_mut() {
+                        for (_provider_name, provider_val) in providers_obj.iter_mut() {
+                            if let Some(provider_obj) = provider_val.as_object_mut() {
+                                if let Some(Value::Array(arr)) = provider_obj.get_mut("models") {
+                                    for model in arr.iter_mut() {
+                                        if let Some(mobj) = model.as_object_mut() {
+                                            mobj.remove("lastTestAt");
+                                            mobj.remove("latency");
+                                            mobj.remove("testStatus");
+                                            mobj.remove("testError");
+                                            if !mobj.contains_key("name") {
+                                                if let Some(id) = mobj.get("id").and_then(|v| v.as_str()) {
+                                                    mobj.insert("name".into(), Value::String(id.to_string()));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -126,10 +172,10 @@ pub fn write_mcp_config(config: Value) -> Result<(), String> {
         .map_err(|e| format!("写入失败: {e}"))
 }
 
-/// 获取本地安装的 openclaw 版本号
+/// 获取本地安装的 openclaw 版本号（异步版本）
 /// macOS: 优先从 npm 包的 package.json 读取（含完整后缀），fallback 到 CLI
-/// Windows/Linux: 直接用 CLI
-fn get_local_version() -> Option<String> {
+/// Windows/Linux: 优先读文件系统，fallback 到 CLI
+async fn get_local_version() -> Option<String> {
     // macOS: 通过 symlink 找到包目录，读 package.json 的 version
     #[cfg(target_os = "macos")]
     {
@@ -167,8 +213,9 @@ fn get_local_version() -> Option<String> {
             }
         }
     }
-    // 所有平台通用 fallback: CLI 输出
-    let output = openclaw_command().arg("--version").output().ok()?;
+    // 所有平台通用 fallback: CLI 输出（异步）
+    use crate::utils::openclaw_command_async;
+    let output = openclaw_command_async().arg("--version").output().await.ok()?;
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
     raw.split_whitespace().last().filter(|s| !s.is_empty()).map(String::from)
 }
@@ -236,7 +283,7 @@ fn detect_installed_source() -> String {
 
 #[tauri::command]
 pub async fn get_version_info() -> Result<VersionInfo, String> {
-    let current = get_local_version();
+    let current = get_local_version().await;
     let source = detect_installed_source();
     let latest = get_latest_version_for(&source).await;
     let parse_ver = |v: &str| -> Vec<u32> {
@@ -272,7 +319,8 @@ pub async fn upgrade_openclaw(app: tauri::AppHandle, source: String) -> Result<S
     use tauri::Emitter;
 
     let current_source = detect_installed_source();
-    let pkg = format!("{}@latest", npm_package_name(&source));
+    let pkg_name = npm_package_name(&source);
+    let pkg = format!("{}@latest", pkg_name);
 
     // 切换源时，或者未安装时（检测 source 和 target，或者目前未安装）
     // 如果系统里已经安装了别的源，先卸载
@@ -289,8 +337,22 @@ pub async fn upgrade_openclaw(app: tauri::AppHandle, source: String) -> Result<S
     let _ = app.emit("upgrade-log", format!("$ npm install -g {pkg}"));
     let _ = app.emit("upgrade-progress", 10);
 
+    // 汉化版只支持官方源和淘宝源
+    let configured_registry = get_configured_registry();
+    let registry = if pkg_name.contains("openclaw-zh") {
+        // 汉化版：淘宝源或官方源
+        if configured_registry.contains("npmmirror.com") || configured_registry.contains("taobao.org") {
+            configured_registry.as_str()
+        } else {
+            "https://registry.npmjs.org"
+        }
+    } else {
+        // 官方版：使用用户配置的镜像源
+        configured_registry.as_str()
+    };
+
     let mut child = npm_command()
-        .args(["install", "-g", &pkg, "--verbose"])
+        .args(["install", "-g", &pkg, "--registry", registry, "--verbose"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -349,9 +411,11 @@ pub async fn upgrade_openclaw(app: tauri::AppHandle, source: String) -> Result<S
                 .output();
         }
         // 重新安装
-        let gw_out = openclaw_command()
+        use crate::utils::openclaw_command_async;
+        let gw_out = openclaw_command_async()
             .args(["gateway", "install"])
-            .output();
+            .output()
+            .await;
         match gw_out {
             Ok(o) if o.status.success() => {
                 let _ = app.emit("upgrade-log", "Gateway 服务已重装");
@@ -362,7 +426,7 @@ pub async fn upgrade_openclaw(app: tauri::AppHandle, source: String) -> Result<S
         }
     }
 
-    let new_ver = get_local_version().unwrap_or_else(|| "未知".into());
+    let new_ver = get_local_version().await.unwrap_or_else(|| "未知".into());
     let msg = format!("✅ 升级成功，当前版本: {new_ver}");
     let _ = app.emit("upgrade-log", &msg);
     Ok(msg)
@@ -554,14 +618,15 @@ fn get_uid() -> Result<u32, String> {
 /// macOS: launchctl kickstart -k
 /// Windows/Linux: openclaw gateway restart
 #[tauri::command]
-pub fn reload_gateway() -> Result<String, String> {
+pub async fn reload_gateway() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         let uid = get_uid()?;
         let target = format!("gui/{uid}/ai.openclaw.gateway");
-        let output = Command::new("launchctl")
+        let output = tokio::process::Command::new("launchctl")
             .args(["kickstart", "-k", &target])
             .output()
+            .await
             .map_err(|e| format!("重载失败: {e}"))?;
         if output.status.success() {
             Ok("Gateway 已重载".to_string())
@@ -572,14 +637,16 @@ pub fn reload_gateway() -> Result<String, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let cli_check = openclaw_command().arg("--version").output();
+        use crate::utils::openclaw_command_async;
+        let cli_check = openclaw_command_async().arg("--version").output().await;
         match cli_check {
             Ok(o) if o.status.success() => {}
             _ => return Err("openclaw CLI 未安装，无法重载 Gateway".into()),
         }
-        let output = openclaw_command()
+        let output = openclaw_command_async()
             .args(["gateway", "restart"])
             .output()
+            .await
             .map_err(|e| format!("重载失败: {e}"))?;
         if output.status.success() {
             Ok("Gateway 已重载".to_string())
@@ -589,6 +656,13 @@ pub fn reload_gateway() -> Result<String, String> {
         }
     }
 }
+
+/// 重启 Gateway 服务（与 reload_gateway 相同实现）
+#[tauri::command]
+pub async fn restart_gateway() -> Result<String, String> {
+    reload_gateway().await
+}
+
 
 /// 测试模型连通性：向 provider 发送一个简单的 chat completion 请求
 #[tauri::command]
@@ -730,9 +804,10 @@ pub async fn list_remote_models(
 
 /// 安装 Gateway 服务（执行 openclaw gateway install）
 #[tauri::command]
-pub fn install_gateway() -> Result<String, String> {
+pub async fn install_gateway() -> Result<String, String> {
+    use crate::utils::openclaw_command_async;
     // 先检测 openclaw CLI 是否可用
-    let cli_check = openclaw_command().arg("--version").output();
+    let cli_check = openclaw_command_async().arg("--version").output().await;
     match cli_check {
         Ok(o) if o.status.success() => {}
         _ => {
@@ -744,9 +819,10 @@ pub fn install_gateway() -> Result<String, String> {
         }
     }
 
-    let output = openclaw_command()
+    let output = openclaw_command_async()
         .args(["gateway", "install"])
         .output()
+        .await
         .map_err(|e| format!("安装失败: {e}"))?;
 
     if output.status.success() {

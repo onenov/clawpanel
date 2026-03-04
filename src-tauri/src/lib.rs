@@ -27,6 +27,7 @@ pub fn run() {
             config::restore_backup,
             config::delete_backup,
             config::reload_gateway,
+            config::restart_gateway,
             config::test_model,
             config::list_remote_models,
             config::upgrade_openclaw,
@@ -59,11 +60,13 @@ pub fn run() {
             extensions::get_cftunnel_logs,
             extensions::get_clawapp_status,
             extensions::install_cftunnel,
+            extensions::install_clawapp,
             // Agent 管理
             agent::list_agents,
             agent::add_agent,
             agent::delete_agent,
             agent::update_agent_identity,
+            agent::update_agent_model,
             agent::backup_agent,
         ])
         .run(tauri::generate_context!())

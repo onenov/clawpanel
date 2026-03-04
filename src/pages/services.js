@@ -26,10 +26,10 @@ export async function render() {
       <p class="page-desc">管理 OpenClaw 服务、检查更新、配置备份</p>
     </div>
     <div id="version-bar"></div>
-    <div id="services-list" class="loading-text">加载中...</div>
+    <div id="services-list"></div>
     <div class="config-section" id="registry-section">
       <div class="config-section-title">npm 源设置</div>
-      <div id="registry-bar" class="loading-text">加载中...</div>
+      <div id="registry-bar"></div>
     </div>
     <div class="config-section" id="backup-section">
       <div class="config-section-title">配置备份</div>
@@ -37,7 +37,7 @@ export async function render() {
       <div id="backup-actions" style="margin-bottom:var(--space-md)">
         <button class="btn btn-primary btn-sm" data-action="create-backup">创建备份</button>
       </div>
-      <div id="backup-list" class="loading-text">加载中...</div>
+      <div id="backup-list"></div>
     </div>
   `
 
@@ -101,7 +101,6 @@ const REGISTRIES = [
 
 async function loadRegistry(page) {
   const bar = page.querySelector('#registry-bar')
-  bar.innerHTML = '<div class="loading-text">加载中...</div>'
   try {
     const current = await api.getNpmRegistry()
     const isPreset = REGISTRIES.some(r => r.value === current)
@@ -131,7 +130,6 @@ async function loadRegistry(page) {
 
 async function loadServices(page) {
   const container = page.querySelector('#services-list')
-  container.innerHTML = '<div class="loading-text">加载中...</div>'
   try {
     const services = await api.getServicesStatus()
     renderServices(container, services)
@@ -200,7 +198,6 @@ function renderServices(container, services) {
 
 async function loadBackups(page) {
   const list = page.querySelector('#backup-list')
-  list.innerHTML = '<div class="loading-text">加载中...</div>'
   try {
     const backups = await api.listBackups()
     renderBackups(list, backups)
@@ -291,6 +288,7 @@ const ACTION_LABELS = { start: '启动', stop: '停止', restart: '重启' }
 
 async function handleServiceAction(action, label, page) {
   const fn = { start: api.startService, stop: api.stopService, restart: api.restartService }[action]
+  toast(`正在${ACTION_LABELS[action]} ${label}...`, 'info')
   await fn(label)
   toast(`${ACTION_LABELS[action]} ${label} 成功`, 'success')
   await loadServices(page)

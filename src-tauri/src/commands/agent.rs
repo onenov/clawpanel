@@ -2,14 +2,15 @@
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
-use crate::utils::openclaw_command;
+use crate::utils::openclaw_command_async;
 
 /// 获取 agent 列表
 #[tauri::command]
-pub fn list_agents() -> Result<Value, String> {
-    let output = openclaw_command()
+pub async fn list_agents() -> Result<Value, String> {
+    let output = openclaw_command_async()
         .args(["agents", "list", "--json"])
         .output()
+        .await
         .map_err(|e| format!("执行失败: {e}"))?;
 
     if !output.status.success() {
@@ -24,7 +25,7 @@ pub fn list_agents() -> Result<Value, String> {
 
 /// 创建新 agent
 #[tauri::command]
-pub fn add_agent(name: String, model: String, workspace: Option<String>) -> Result<Value, String> {
+pub async fn add_agent(name: String, model: String, workspace: Option<String>) -> Result<Value, String> {
     let ws = match workspace {
         Some(ref w) if !w.is_empty() => std::path::PathBuf::from(w),
         _ => super::openclaw_dir()
@@ -48,9 +49,10 @@ pub fn add_agent(name: String, model: String, workspace: Option<String>) -> Resu
         args.push(model);
     }
 
-    let output = openclaw_command()
+    let output = openclaw_command_async()
         .args(&args)
         .output()
+        .await
         .map_err(|e| format!("执行失败: {e}"))?;
 
     if !output.status.success() {
@@ -61,19 +63,20 @@ pub fn add_agent(name: String, model: String, workspace: Option<String>) -> Resu
     let stdout = String::from_utf8_lossy(&output.stdout);
     serde_json::from_str(&stdout).unwrap_or(Value::String("ok".into()));
     // 返回最新列表
-    list_agents()
+    list_agents().await
 }
 
 /// 删除 agent
 #[tauri::command]
-pub fn delete_agent(id: String) -> Result<String, String> {
+pub async fn delete_agent(id: String) -> Result<String, String> {
     if id == "main" {
         return Err("不能删除默认 Agent".into());
     }
 
-    let output = openclaw_command()
+    let output = openclaw_command_async()
         .args(["agents", "delete", &id])
         .output()
+        .await
         .map_err(|e| format!("执行失败: {e}"))?;
 
     if !output.status.success() {
@@ -91,35 +94,69 @@ pub fn update_agent_identity(
     name: Option<String>,
     emoji: Option<String>,
 ) -> Result<String, String> {
-    let mut args = vec![
-        "agents".to_string(),
-        "set-identity".to_string(),
-        "--agent".to_string(),
-        id,
-        "--json".to_string(),
-    ];
+    let path = super::openclaw_dir().join("openclaw.json");
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("读取配置失败: {e}"))?;
+    let mut config: Value = serde_json::from_str(&content)
+        .map_err(|e| format!("解析 JSON 失败: {e}"))?;
+
+    let agents_list = config
+        .get_mut("agents")
+        .and_then(|a| a.get_mut("list"))
+        .and_then(|l| l.as_array_mut())
+        .ok_or("配置格式错误")?;
+
+    let agent = agents_list
+        .iter_mut()
+        .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(&id))
+        .ok_or(format!("Agent「{id}」不存在"))?;
+
+    // 确保 identity 字段存在且为对象
+    if !agent.get("identity").and_then(|i| i.as_object()).is_some() {
+        agent.as_object_mut()
+            .ok_or("Agent 格式错误")?
+            .insert("identity".to_string(), serde_json::json!({}));
+    }
+
+    let identity = agent
+        .get_mut("identity")
+        .and_then(|i| i.as_object_mut())
+        .ok_or("identity 格式错误")?;
 
     if let Some(n) = name {
         if !n.is_empty() {
-            args.push("--name".to_string());
-            args.push(n);
+            identity.insert("name".to_string(), Value::String(n));
         }
     }
     if let Some(e) = emoji {
         if !e.is_empty() {
-            args.push("--emoji".to_string());
-            args.push(e);
+            identity.insert("emoji".to_string(), Value::String(e));
         }
     }
 
-    let output = openclaw_command()
-        .args(&args)
-        .output()
-        .map_err(|e| format!("执行失败: {e}"))?;
+    // 提前提取 workspace 路径（克隆为 String，避免借用冲突）
+    let workspace_path = agent.get("workspace")
+        .and_then(|w| w.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            config.get("agents")
+                .and_then(|a| a.get("defaults"))
+                .and_then(|d| d.get("workspace"))
+                .and_then(|w| w.as_str())
+                .map(|s| s.to_string())
+        });
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("更新失败: {stderr}"));
+    let json = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("序列化失败: {e}"))?;
+    fs::write(&path, json)
+        .map_err(|e| format!("写入配置失败: {e}"))?;
+
+    // 删除 IDENTITY.md 文件，让配置文件生效
+    if let Some(ws_str) = workspace_path {
+        let identity_file = std::path::PathBuf::from(ws_str).join("IDENTITY.md");
+        if identity_file.exists() {
+            let _ = fs::remove_file(&identity_file);
+        }
     }
 
     Ok("已更新".into())
@@ -177,4 +214,37 @@ fn collect_dir_to_zip(
         }
     }
     Ok(())
+}
+
+/// 更新 agent 模型配置
+#[tauri::command]
+pub fn update_agent_model(id: String, model: String) -> Result<String, String> {
+    let path = super::openclaw_dir().join("openclaw.json");
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("读取配置失败: {e}"))?;
+    let mut config: Value = serde_json::from_str(&content)
+        .map_err(|e| format!("解析 JSON 失败: {e}"))?;
+
+    let agents_list = config
+        .get_mut("agents")
+        .and_then(|a| a.get_mut("list"))
+        .and_then(|l| l.as_array_mut())
+        .ok_or("配置格式错误")?;
+
+    let agent = agents_list
+        .iter_mut()
+        .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(&id))
+        .ok_or(format!("Agent「{id}」不存在"))?;
+
+    let model_obj = serde_json::json!({ "primary": model });
+    agent.as_object_mut()
+        .ok_or("Agent 格式错误")?
+        .insert("model".to_string(), model_obj);
+
+    let json = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("序列化失败: {e}"))?;
+    fs::write(&path, json)
+        .map_err(|e| format!("写入配置失败: {e}"))?;
+
+    Ok("已更新".into())
 }

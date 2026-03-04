@@ -326,8 +326,9 @@ export class WsClient {
       if (!this._ws || this._ws.readyState !== WebSocket.OPEN || !this._gatewayReady) {
         if (!this._intentionalClose && (this._reconnectAttempts > 0 || !this._gatewayReady)) {
           const waitTimeout = setTimeout(() => { unsub(); reject(new Error('等待重连超时')) }, 15000)
-          const unsub = this.onReady(() => {
+          const unsub = this.onReady((hello, sessionKey, err) => {
             clearTimeout(waitTimeout); unsub()
+            if (err?.error) { reject(new Error(err.message || 'Gateway 握手失败')); return }
             this.request(method, params).then(resolve, reject)
           })
           return
@@ -341,8 +342,14 @@ export class WsClient {
     })
   }
 
-  chatSend(sessionKey, message) {
-    return this.request('chat.send', { sessionKey, message, deliver: false, idempotencyKey: uuid() })
+  chatSend(sessionKey, message, attachments) {
+    const params = { sessionKey, message, deliver: false, idempotencyKey: uuid() }
+    if (attachments && attachments.length > 0) {
+      params.attachments = attachments
+      console.log('[ws] 发送附件:', attachments.length, '个')
+      console.log('[ws] 附件详情:', attachments.map(a => ({ type: a.type, mime: a.mimeType, name: a.fileName, size: a.content?.length })))
+    }
+    return this.request('chat.send', params)
   }
 
   chatHistory(sessionKey, limit = 200) {

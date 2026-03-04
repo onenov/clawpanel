@@ -211,6 +211,8 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
+    use tokio::process::Command as TokioCommand;
+
     /// Windows 不需要 UID
     pub fn current_uid() -> Result<u32, String> {
         Ok(0)
@@ -230,10 +232,27 @@ mod platform {
         vec!["ai.openclaw.gateway".to_string()]
     }
 
+    /// 从 openclaw.json 读取 gateway 端口，fallback 到 18789
+    fn read_gateway_port() -> u16 {
+        let config_path = crate::commands::openclaw_dir().join("openclaw.json");
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(port) = val.get("gateway").and_then(|g| g.get("port")).and_then(|p| p.as_u64()) {
+                    if port > 0 && port < 65536 {
+                        return port as u16;
+                    }
+                }
+            }
+        }
+        18789
+    }
+
     /// 通过端口探测检测 Gateway 状态
     pub fn check_service_status(_uid: u32, _label: &str) -> (bool, Option<u32>) {
+        let port = read_gateway_port();
+        let addr = format!("127.0.0.1:{port}");
         match std::net::TcpStream::connect_timeout(
-            &"127.0.0.1:18789".parse().unwrap(),
+            &addr.parse().unwrap_or_else(|_| "127.0.0.1:18789".parse().unwrap()),
             std::time::Duration::from_millis(150),
         ) {
             Ok(_) => (true, None),
@@ -242,23 +261,42 @@ mod platform {
     }
 
     /// 以前台模式 spawn Gateway（不需要管理员权限）
-    pub fn start_service_impl(_label: &str) -> Result<(), String> {
+    pub async fn start_service_impl(_label: &str) -> Result<(), String> {
         if !is_cli_installed() {
             return Err("openclaw CLI 未安装，请先通过 npm install -g @qingchencloud/openclaw-zh 安装".into());
         }
         if check_service_status(0, "").0 {
             return Ok(());
         }
-        crate::utils::openclaw_command()
+
+        let log_dir = dirs::home_dir()
+            .unwrap_or_default()
+            .join(".openclaw")
+            .join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+
+        let stdout_log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("gateway.log"))
+            .map_err(|e| format!("创建日志文件失败: {e}"))?;
+
+        let stderr_log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("gateway.err.log"))
+            .map_err(|e| format!("创建错误日志文件失败: {e}"))?;
+
+        crate::utils::openclaw_command_async()
             .arg("gateway")
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(stdout_log)
+            .stderr(stderr_log)
             .spawn()
             .map_err(|e| format!("启动 Gateway 失败: {e}"))?;
 
         for _ in 0..25 {
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             if check_service_status(0, "").0 {
                 return Ok(());
             }
@@ -266,28 +304,29 @@ mod platform {
         Err("Gateway 启动超时，请检查日志".into())
     }
 
-    pub fn stop_service_impl(_label: &str) -> Result<(), String> {
-        let _ = crate::utils::openclaw_command()
+    pub async fn stop_service_impl(_label: &str) -> Result<(), String> {
+        let _ = crate::utils::openclaw_command_async()
             .args(["gateway", "stop"])
-            .output();
+            .output()
+            .await;
         if check_service_status(0, "").0 {
-            use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
-            let _ = std::process::Command::new("cmd")
+            let _ = TokioCommand::new("cmd")
                 .args(["/c", "taskkill", "/f", "/im", "node.exe", "/fi", "WINDOWTITLE eq openclaw*"])
                 .creation_flags(CREATE_NO_WINDOW)
-                .output();
+                .output()
+                .await;
         }
         Ok(())
     }
 
-    pub fn restart_service_impl(_label: &str) -> Result<(), String> {
-        let _ = stop_service_impl(_label);
+    pub async fn restart_service_impl(_label: &str) -> Result<(), String> {
+        let _ = stop_service_impl(_label).await;
         for _ in 0..10 {
             if !check_service_status(0, "").0 { break; }
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
-        start_service_impl(_label)
+        start_service_impl(_label).await
     }
 }
 
@@ -295,10 +334,10 @@ mod platform {
 
 #[cfg(target_os = "linux")]
 mod platform {
-    use std::process::Command;
+    use tokio::process::Command;
 
     pub fn current_uid() -> Result<u32, String> {
-        let output = Command::new("id")
+        let output = std::process::Command::new("id")
             .arg("-u")
             .output()
             .map_err(|e| format!("获取 UID 失败: {e}"))?;
@@ -306,10 +345,11 @@ mod platform {
         uid_str.parse::<u32>().map_err(|e| format!("解析 UID 失败: {e}"))
     }
 
-    pub fn is_cli_installed() -> bool {
+    pub async fn is_cli_installed() -> bool {
         Command::new("openclaw")
             .arg("--version")
             .output()
+            .await
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
@@ -318,14 +358,14 @@ mod platform {
         vec!["ai.openclaw.gateway".to_string()]
     }
 
-    pub fn check_service_status(_uid: u32, _label: &str) -> (bool, Option<u32>) {
+    pub async fn check_service_status(_uid: u32, _label: &str) -> (bool, Option<u32>) {
         match std::net::TcpStream::connect_timeout(
             &"127.0.0.1:18789".parse().unwrap(),
             std::time::Duration::from_secs(2),
         ) {
             Ok(_) => (true, None),
             Err(_) => {
-                if let Ok(output) = Command::new("openclaw").arg("health").output() {
+                if let Ok(output) = Command::new("openclaw").arg("health").output().await {
                     let text = String::from_utf8_lossy(&output.stdout);
                     if output.status.success() && !text.contains("not running") {
                         return (true, None);
@@ -336,13 +376,14 @@ mod platform {
         }
     }
 
-    fn gateway_command(action: &str) -> Result<(), String> {
-        if !is_cli_installed() {
+    async fn gateway_command(action: &str) -> Result<(), String> {
+        if !is_cli_installed().await {
             return Err("openclaw CLI 未安装，请先通过 npm install -g @qingchencloud/openclaw-zh 安装".into());
         }
-        let output = crate::utils::openclaw_command()
+        let output = crate::utils::openclaw_command_async()
             .args(["gateway", action])
             .output()
+            .await
             .map_err(|e| format!("执行 openclaw gateway {action} 失败: {e}"))?;
 
         if !output.status.success() {
@@ -352,31 +393,40 @@ mod platform {
         Ok(())
     }
 
-    pub fn start_service_impl(_label: &str) -> Result<(), String> {
-        gateway_command("start")
+    pub async fn start_service_impl(_label: &str) -> Result<(), String> {
+        gateway_command("start").await
     }
 
-    pub fn stop_service_impl(_label: &str) -> Result<(), String> {
-        gateway_command("stop")
+    pub async fn stop_service_impl(_label: &str) -> Result<(), String> {
+        gateway_command("stop").await
     }
 
-    pub fn restart_service_impl(_label: &str) -> Result<(), String> {
-        gateway_command("restart")
+    pub async fn restart_service_impl(_label: &str) -> Result<(), String> {
+        gateway_command("restart").await
     }
 }
 
 // ===== 跨平台公共接口 =====
 
 #[tauri::command]
-pub fn get_services_status() -> Result<Vec<ServiceStatus>, String> {
+pub async fn get_services_status() -> Result<Vec<ServiceStatus>, String> {
     let uid = platform::current_uid()?;
     let labels = platform::scan_service_labels();
     let desc_map = description_map();
+
+    #[cfg(target_os = "linux")]
+    let cli_installed = platform::is_cli_installed().await;
+    #[cfg(not(target_os = "linux"))]
     let cli_installed = platform::is_cli_installed();
+
     let mut results = Vec::new();
 
     for label in &labels {
+        #[cfg(target_os = "linux")]
+        let (running, pid) = platform::check_service_status(uid, label).await;
+        #[cfg(not(target_os = "linux"))]
         let (running, pid) = platform::check_service_status(uid, label);
+
         results.push(ServiceStatus {
             label: label.clone(),
             pid,
@@ -393,16 +443,16 @@ pub fn get_services_status() -> Result<Vec<ServiceStatus>, String> {
 }
 
 #[tauri::command]
-pub fn start_service(label: String) -> Result<(), String> {
-    platform::start_service_impl(&label)
+pub async fn start_service(label: String) -> Result<(), String> {
+    platform::start_service_impl(&label).await
 }
 
 #[tauri::command]
-pub fn stop_service(label: String) -> Result<(), String> {
-    platform::stop_service_impl(&label)
+pub async fn stop_service(label: String) -> Result<(), String> {
+    platform::stop_service_impl(&label).await
 }
 
 #[tauri::command]
-pub fn restart_service(label: String) -> Result<(), String> {
-    platform::restart_service_impl(&label)
+pub async fn restart_service(label: String) -> Result<(), String> {
+    platform::restart_service_impl(&label).await
 }

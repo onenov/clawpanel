@@ -2,7 +2,7 @@
  * Agent 管理页面
  * Agent 增删改查 + 身份编辑
  */
-import { api } from '../lib/tauri-api.js'
+import { api, invalidate } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
 import { showModal, showConfirm } from '../components/modal.js'
 
@@ -21,7 +21,7 @@ export async function render() {
       </div>
     </div>
     <div class="page-content">
-      <div id="agents-list" class="loading-text">加载中...</div>
+      <div id="agents-list"></div>
     </div>
   `
 
@@ -39,6 +39,12 @@ async function loadAgents(page, state) {
   try {
     state.agents = await api.listAgents()
     renderAgents(page, state)
+
+    // 只在第一次加载时绑定事件（避免重复绑定）
+    if (!state.eventsAttached) {
+      attachAgentEvents(page, state)
+      state.eventsAttached = true
+    }
   } catch (e) {
     container.innerHTML = '<div style="color:var(--error);padding:20px">加载失败: ' + e + '</div>'
     toast('加载 Agent 列表失败: ' + e, 'error')
@@ -85,8 +91,10 @@ function renderAgents(page, state) {
       </div>
     `
   }).join('')
+}
 
-  // 事件委托
+function attachAgentEvents(page, state) {
+  const container = page.querySelector('#agents-list')
   container.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-action]')
     if (!btn) return
@@ -143,6 +151,9 @@ async function showAddAgentDialog(page, state) {
           await api.updateAgentIdentity(id, name || null, emoji || null)
         }
         toast('Agent 已创建', 'success')
+
+        // 强制清除缓存并重新加载
+        invalidate('list_agents')
         await loadAgents(page, state)
       } catch (e) {
         toast('创建失败: ' + e, 'error')
@@ -157,7 +168,7 @@ async function showEditAgentDialog(page, state, id) {
 
   const name = agent.identityName ? agent.identityName.split(',')[0].trim() : ''
 
-  // 获取模型列表用于下拉选择
+  // 获取模型列表
   let models = []
   try {
     const config = await api.readOpenclawConfig()
@@ -168,23 +179,29 @@ async function showEditAgentDialog(page, state, id) {
         if (mid) models.push({ value: `${pk}/${mid}`, label: `${pk}/${mid}` })
       }
     }
-  } catch { /* 忽略 */ }
+    console.log('[Agent编辑] 获取到模型列表:', models.length, '个')
+  } catch (e) {
+    console.error('[Agent编辑] 获取模型列表失败:', e)
+  }
 
   const fields = [
     { name: 'name', label: '名称', value: name, placeholder: '例如：翻译助手' },
-    { name: 'emoji', label: 'Emoji', value: '', placeholder: '例如：🌐' },
+    { name: 'emoji', label: 'Emoji', value: agent.identityEmoji || '', placeholder: '例如：🌐' },
   ]
 
-  // 有模型列表时提供下拉选择
   if (models.length) {
-    fields.push({
+    const modelField = {
       name: 'model', label: '模型', type: 'select',
       value: agent.model || models[0]?.value || '',
       options: models,
-    })
+    }
+    fields.push(modelField)
+    console.log('[Agent编辑] 当前模型:', agent.model)
+    console.log('[Agent编辑] 模型选项:', models)
+  } else {
+    console.warn('[Agent编辑] 模型列表为空，不显示模型选择器')
   }
 
-  // 工作区只读展示
   fields.push({
     name: 'workspace', label: '工作区',
     value: agent.workspace || '未设置',
@@ -196,16 +213,30 @@ async function showEditAgentDialog(page, state, id) {
     title: `编辑 Agent — ${id}`,
     fields,
     onConfirm: async (result) => {
+      console.log('[Agent编辑] 保存数据:', result)
       const newName = (result.name || '').trim()
       const emoji = (result.emoji || '').trim()
+      const model = (result.model || '').trim()
 
       try {
         if (newName || emoji) {
+          console.log('[Agent编辑] 更新身份信息...')
           await api.updateAgentIdentity(id, newName || null, emoji || null)
         }
+        if (model && model !== agent.model) {
+          console.log('[Agent编辑] 更新模型:', agent.model, '->', model)
+          await api.updateAgentModel(id, model)
+        }
+
+        // 手动更新 state 并重新渲染，确保立即生效
+        if (newName) agent.identityName = newName
+        if (emoji) agent.identityEmoji = emoji
+        if (model) agent.model = model
+        renderAgents(page, state)
+
         toast('已更新', 'success')
-        await loadAgents(page, state)
       } catch (e) {
+        console.error('[Agent编辑] 保存失败:', e)
         toast('更新失败: ' + e, 'error')
       }
     }

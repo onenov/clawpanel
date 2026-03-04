@@ -51,7 +51,6 @@ export async function render() {
 
 async function loadDebugInfo(page) {
   const el = page.querySelector('#debug-content')
-  el.innerHTML = '<div class="loading-text">检测中...</div>'
 
   const info = {
     timestamp: new Date().toLocaleString('zh-CN'),

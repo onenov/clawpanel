@@ -33,7 +33,7 @@ export async function render() {
         <input type="checkbox" id="log-autoscroll" checked> 自动滚动
       </label>
     </div>
-    <div class="log-viewer" id="log-content" style="height:calc(100vh - 280px)"><div class="loading-text">加载中...</div></div>
+    <div class="log-viewer" id="log-content" style="height:calc(100vh - 280px)"></div>
   `
 
   let currentTab = 'gateway'
@@ -75,7 +75,6 @@ export function cleanup() {
 
 async function loadLog(page, logName) {
   const el = page.querySelector('#log-content')
-  el.innerHTML = '<div class="loading-text">加载中...</div>'
   try {
     const content = await api.readLogTail(logName, 200)
     if (!content || !content.trim()) {
@@ -95,7 +94,6 @@ async function loadLog(page, logName) {
 
 async function searchLog(page, logName, query) {
   const el = page.querySelector('#log-content')
-  el.innerHTML = '<div class="loading-text">搜索中...</div>'
   try {
     const results = await api.searchLog(logName, query)
     if (!results || !results.length) {

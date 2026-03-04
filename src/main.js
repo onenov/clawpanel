@@ -83,7 +83,7 @@ async function autoConnectWebSocket() {
       return
     }
 
-    wsClient.connect(`ws://127.0.0.1:${port}/ws`, token)
+    wsClient.connect(`127.0.0.1:${port}`, token)
     console.log('[main] WebSocket 连接已启动')
   } catch (e) {
     console.error('[main] 自动连接 WebSocket 失败:', e)

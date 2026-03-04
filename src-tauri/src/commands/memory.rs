@@ -2,7 +2,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use crate::utils::openclaw_command;
+use crate::utils::openclaw_command_async;
 
 /// 检查路径是否包含不安全字符（目录遍历、绝对路径等）
 fn is_unsafe_path(path: &str) -> bool {
@@ -13,12 +13,13 @@ fn is_unsafe_path(path: &str) -> bool {
         || (path.len() >= 2 && path.as_bytes()[1] == b':') // Windows 绝对路径 C:\
 }
 
-/// 根据 agent_id 获取 workspace 路径
+/// 根据 agent_id 获取 workspace 路径（异步版本）
 /// 调用 openclaw agents list --json 解析
-fn agent_workspace(agent_id: &str) -> Result<PathBuf, String> {
-    let output = openclaw_command()
+async fn agent_workspace(agent_id: &str) -> Result<PathBuf, String> {
+    let output = openclaw_command_async()
         .args(["agents", "list", "--json"])
         .output()
+        .await
         .map_err(|e| format!("执行 openclaw 失败: {e}"))?;
 
     if !output.status.success() {
@@ -42,8 +43,8 @@ fn agent_workspace(agent_id: &str) -> Result<PathBuf, String> {
     Err(format!("Agent「{agent_id}」不存在或无 workspace"))
 }
 
-fn memory_dir_for_agent(agent_id: &str, category: &str) -> Result<PathBuf, String> {
-    let ws = agent_workspace(agent_id)?;
+async fn memory_dir_for_agent(agent_id: &str, category: &str) -> Result<PathBuf, String> {
+    let ws = agent_workspace(agent_id).await?;
     Ok(match category {
         "memory" => ws.join("memory"),
         "archive" => {
@@ -62,9 +63,9 @@ fn memory_dir_for_agent(agent_id: &str, category: &str) -> Result<PathBuf, Strin
 }
 
 #[tauri::command]
-pub fn list_memory_files(category: String, agent_id: Option<String>) -> Result<Vec<String>, String> {
+pub async fn list_memory_files(category: String, agent_id: Option<String>) -> Result<Vec<String>, String> {
     let aid = agent_id.as_deref().unwrap_or("main");
-    let dir = memory_dir_for_agent(aid, &category)?;
+    let dir = memory_dir_for_agent(aid, &category).await?;
     if !dir.exists() {
         return Ok(vec![]);
     }
@@ -105,16 +106,16 @@ fn collect_files(
 }
 
 #[tauri::command]
-pub fn read_memory_file(path: String, agent_id: Option<String>) -> Result<String, String> {
+pub async fn read_memory_file(path: String, agent_id: Option<String>) -> Result<String, String> {
     if is_unsafe_path(&path) {
         return Err("非法路径".to_string());
     }
 
     let aid = agent_id.as_deref().unwrap_or("main");
     let candidates = [
-        memory_dir_for_agent(aid, "memory"),
-        memory_dir_for_agent(aid, "archive"),
-        memory_dir_for_agent(aid, "core"),
+        memory_dir_for_agent(aid, "memory").await,
+        memory_dir_for_agent(aid, "archive").await,
+        memory_dir_for_agent(aid, "core").await,
     ];
 
     for c in &candidates {
@@ -131,14 +132,14 @@ pub fn read_memory_file(path: String, agent_id: Option<String>) -> Result<String
 }
 
 #[tauri::command]
-pub fn write_memory_file(path: String, content: String, category: Option<String>, agent_id: Option<String>) -> Result<(), String> {
+pub async fn write_memory_file(path: String, content: String, category: Option<String>, agent_id: Option<String>) -> Result<(), String> {
     if is_unsafe_path(&path) {
         return Err("非法路径".to_string());
     }
 
     let aid = agent_id.as_deref().unwrap_or("main");
     let cat = category.unwrap_or_else(|| "memory".to_string());
-    let base = memory_dir_for_agent(aid, &cat)?;
+    let base = memory_dir_for_agent(aid, &cat).await?;
 
     let full_path = base.join(&path);
     if let Some(parent) = full_path.parent() {
@@ -148,16 +149,16 @@ pub fn write_memory_file(path: String, content: String, category: Option<String>
 }
 
 #[tauri::command]
-pub fn delete_memory_file(path: String, agent_id: Option<String>) -> Result<(), String> {
+pub async fn delete_memory_file(path: String, agent_id: Option<String>) -> Result<(), String> {
     if is_unsafe_path(&path) {
         return Err("非法路径".to_string());
     }
 
     let aid = agent_id.as_deref().unwrap_or("main");
     let candidates = [
-        memory_dir_for_agent(aid, "memory"),
-        memory_dir_for_agent(aid, "archive"),
-        memory_dir_for_agent(aid, "core"),
+        memory_dir_for_agent(aid, "memory").await,
+        memory_dir_for_agent(aid, "archive").await,
+        memory_dir_for_agent(aid, "core").await,
     ];
 
     for c in &candidates {
@@ -174,9 +175,9 @@ pub fn delete_memory_file(path: String, agent_id: Option<String>) -> Result<(), 
 }
 
 #[tauri::command]
-pub fn export_memory_zip(category: String, agent_id: Option<String>) -> Result<String, String> {
+pub async fn export_memory_zip(category: String, agent_id: Option<String>) -> Result<String, String> {
     let aid = agent_id.as_deref().unwrap_or("main");
-    let dir = memory_dir_for_agent(aid, &category)?;
+    let dir = memory_dir_for_agent(aid, &category).await?;
     if !dir.exists() {
         return Err("目录不存在".to_string());
     }
