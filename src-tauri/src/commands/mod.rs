@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 pub mod agent;
 pub mod assistant;
@@ -15,12 +16,19 @@ pub fn openclaw_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_default().join(".openclaw")
 }
 
+/// 缓存 enhanced_path 结果，避免每次调用都扫描文件系统
+static ENHANCED_PATH_CACHE: OnceLock<String> = OnceLock::new();
+
 /// Tauri 应用启动时 PATH 可能不完整：
 /// - macOS 从 Finder 启动时 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin
 /// - Windows 上安装 Node.js 到非默认路径、或安装后未重启进程
 ///
 /// 补充 Node.js / npm 常见安装路径
 pub fn enhanced_path() -> String {
+    ENHANCED_PATH_CACHE.get_or_init(build_enhanced_path).clone()
+}
+
+fn build_enhanced_path() -> String {
     let current = std::env::var("PATH").unwrap_or_default();
     let home = dirs::home_dir().unwrap_or_default();
 

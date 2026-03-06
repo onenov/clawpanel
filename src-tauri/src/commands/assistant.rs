@@ -4,6 +4,20 @@ use base64::{engine::general_purpose, Engine as _};
 /// 仅在用户主动开启工具后由 AI 调用
 use std::path::PathBuf;
 
+/// 审计日志：记录 AI 助手的敏感操作（exec / read / write）
+fn audit_log(action: &str, detail: &str) {
+    let log_dir = super::openclaw_dir().join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("assistant-audit.log");
+    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let line = format!("[{ts}] [{action}] {detail}\n");
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+}
+
 /// ClawPanel 数据目录（~/.openclaw/clawpanel/）
 fn data_dir() -> PathBuf {
     super::openclaw_dir().join("clawpanel")
@@ -125,6 +139,8 @@ pub async fn assistant_exec(command: String, cwd: Option<String>) -> Result<Stri
             .to_string()
     });
 
+    audit_log("EXEC", &format!("cmd={command} cwd={work_dir}"));
+
     let output;
 
     #[cfg(target_os = "windows")]
@@ -184,6 +200,7 @@ pub async fn assistant_exec(command: String, cwd: Option<String>) -> Result<Stri
 /// 读取文件内容
 #[tauri::command]
 pub async fn assistant_read_file(path: String) -> Result<String, String> {
+    audit_log("READ", &path);
     let content = tokio::fs::read_to_string(&path)
         .await
         .map_err(|e| format!("读取文件失败 {path}: {e}"))?;
@@ -202,6 +219,7 @@ pub async fn assistant_read_file(path: String) -> Result<String, String> {
 /// 写入文件
 #[tauri::command]
 pub async fn assistant_write_file(path: String, content: String) -> Result<String, String> {
+    audit_log("WRITE", &format!("{path} ({} bytes)", content.len()));
     if let Some(parent) = PathBuf::from(&path).parent() {
         tokio::fs::create_dir_all(parent)
             .await

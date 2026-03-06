@@ -5,6 +5,20 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.6] - 2026-03-06
+
+### 安全修复 (Security)
+
+- **dev-api.js 命令注入漏洞** — `search_log` 的 `query` 参数直接拼入 `grep` shell 命令，可注入任意系统命令。改为纯 JS 字符串匹配实现
+- **dev-api.js 路径遍历漏洞** — `read_memory_file` / `write_memory_file` / `delete_memory_file` 未校验路径，可通过 `../` 读写任意文件。新增 `isUnsafePath()` 检查（与 Rust 端 `memory.rs` 对齐）
+- **Gateway allowedOrigins 过于宽松** — `patch_gateway_origins()` 设置 `["*"]` 允许任何网页连接本地 Gateway WebSocket。收紧为仅允许 Tauri origin + `localhost:1420`
+
+### 改进 (Improvements)
+
+- **AI 助手审计日志** — `assistant_exec` / `assistant_read_file` / `assistant_write_file` 新增操作审计日志，记录到 `~/.openclaw/logs/assistant-audit.log`
+- **connect frame 版本号** — `device.rs` 中 `userAgent` 和 `client.version` 从硬编码 `1.0.0` 改为编译时读取 `Cargo.toml` 版本
+- **enhanced_path() 性能优化** — 使用 `OnceLock` 缓存结果，避免每次调用都扫描文件系统
+
 ## [0.5.5] - 2026-03-06
 
 ### 修复 (Bug Fixes)

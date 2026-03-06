@@ -22,6 +22,10 @@ const isMac = process.platform === 'darwin'
 const isLinux = process.platform === 'linux'
 const SCOPES = ['operator.admin', 'operator.approvals', 'operator.pairing', 'operator.read', 'operator.write']
 
+function isUnsafePath(p) {
+  return !p || p.includes('..') || p.includes('\0') || path.isAbsolute(p)
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     let body = ''
@@ -584,12 +588,11 @@ const handlers = {
     const file = logFiles[logName] || logFiles['gateway']
     const logPath = path.join(LOGS_DIR, file)
     if (!fs.existsSync(logPath)) return []
-    try {
-      const output = execSync(`grep -i "${query.replace(/"/g, '\\"')}" "${logPath}" | tail -${maxResults} 2>&1`).toString()
-      return output.split('\n').filter(Boolean)
-    } catch {
-      return []
-    }
+    // 纯 JS 实现，避免 shell 命令注入
+    const content = fs.readFileSync(logPath, 'utf8')
+    const queryLower = (query || '').toLowerCase()
+    const matched = content.split('\n').filter(line => line.toLowerCase().includes(queryLower))
+    return matched.slice(-maxResults)
   },
 
   // Agent 管理
@@ -619,6 +622,7 @@ const handlers = {
   },
 
   read_memory_file({ path: filePath, agent_id }) {
+    if (isUnsafePath(filePath)) throw new Error('非法路径')
     const suffix = agent_id && agent_id !== 'main' ? `/agents/${agent_id}` : ''
     const full = path.join(OPENCLAW_DIR, 'workspace' + suffix, filePath)
     if (!fs.existsSync(full)) return ''
@@ -626,6 +630,7 @@ const handlers = {
   },
 
   write_memory_file({ path: filePath, content, category, agent_id }) {
+    if (isUnsafePath(filePath)) throw new Error('非法路径')
     const suffix = agent_id && agent_id !== 'main' ? `/agents/${agent_id}` : ''
     const full = path.join(OPENCLAW_DIR, 'workspace' + suffix, filePath)
     const dir = path.dirname(full)
@@ -635,6 +640,7 @@ const handlers = {
   },
 
   delete_memory_file({ path: filePath, agent_id }) {
+    if (isUnsafePath(filePath)) throw new Error('非法路径')
     const suffix = agent_id && agent_id !== 'main' ? `/agents/${agent_id}` : ''
     const full = path.join(OPENCLAW_DIR, 'workspace' + suffix, filePath)
     if (fs.existsSync(full)) fs.unlinkSync(full)
