@@ -1282,8 +1282,10 @@ const handlers = {
     try {
       // entrypoint 会 sed 注入 gateway.host（OpenClaw 不认识），doctor --fix 清理
       await cExec('openclaw doctor --fix 2>/dev/null || true')
-      // 停止旧 Gateway，启动新的（合并为一条命令确保 exec 会话存活足够久）
-      await cExec('pkill -f openclaw-gateway 2>/dev/null; pkill -f "openclaw gateway" 2>/dev/null; sleep 1; mkdir -p /root/.openclaw/logs; nohup openclaw gateway >> /root/.openclaw/logs/gateway.log 2>&1 & sleep 3')
+      // 停止旧 Gateway
+      await cExec('pkill -f openclaw-gateway 2>/dev/null; pkill -f "openclaw gateway" 2>/dev/null; sleep 1')
+      // 启动新 Gateway — 作为独立 Detach exec 的主进程（不能 nohup &，shell 退出会 SIGTERM 杀子进程）
+      await cExec('mkdir -p /root/.openclaw/logs && exec openclaw gateway >> /root/.openclaw/logs/gateway.log 2>&1')
       console.log(`[init-worker] Gateway 已重启 → ${containerId.slice(0, 12)}`)
     } catch (e) {
       console.warn(`[init-worker] Gateway 重启失败: ${e.message}`)
