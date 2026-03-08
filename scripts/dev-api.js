@@ -1018,14 +1018,29 @@ const handlers = {
     if (!gwBinding || !gwBinding[0]?.HostPort) throw new Error('该容器没有暴露 Gateway 端口 (18789)')
     const gwPort = gwBinding[0].HostPort
 
-    // 2. TCP 端口预检 — 快速判断 Gateway 是否在监听
+    // 2. TCP 端口预检 — 快速判断 Gateway 是否在监听，失败则自动修复
     const containerName = resp.data?.Name?.replace(/^\//, '') || containerId.slice(0, 12)
-    await new Promise((resolve, reject) => {
-      const sock = net.connect({ host: '127.0.0.1', port: gwPort, timeout: 5000 })
+    const tcpCheck = (port) => new Promise((resolve, reject) => {
+      const sock = net.connect({ host: '127.0.0.1', port, timeout: 5000 })
       sock.on('connect', () => { sock.destroy(); resolve() })
-      sock.on('timeout', () => { sock.destroy(); reject(new Error(`Gateway 端口 ${gwPort} 无响应 — 容器 ${containerName} 内的 Gateway 可能未启动，请检查容器日志`)) })
-      sock.on('error', (e) => { reject(new Error(`Gateway 端口 ${gwPort} 不可达 — ${e.code === 'ECONNREFUSED' ? `容器 ${containerName} 内的 Gateway 未启动` : e.message}`)) })
+      sock.on('timeout', () => { sock.destroy(); reject(new Error('timeout')) })
+      sock.on('error', (e) => reject(e))
     })
+    try {
+      await tcpCheck(gwPort)
+    } catch {
+      // Gateway 未运行 → 自动修复：同步配置 + 重启 Gateway
+      console.log(`[gateway-chat] ${containerName}: Gateway 未响应，自动修复中...`)
+      try {
+        await handlers.docker_init_worker({ nodeId, containerId, role: 'general' })
+        // 等待 Gateway 启动
+        await new Promise(r => setTimeout(r, 8000))
+        await tcpCheck(gwPort)
+        console.log(`[gateway-chat] ${containerName}: 自动修复成功`)
+      } catch (e2) {
+        throw new Error(`${containerName}: Gateway 自动修复失败 — ${e2.message}`)
+      }
+    }
 
     // 2b. 从容器配置中读取 Gateway auth token（Gateway 启动时自动生成）
     let gatewayToken = ''
