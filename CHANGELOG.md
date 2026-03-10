@@ -5,6 +5,27 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.7.4] - 2026-03-11
+
+### 新功能 (Features)
+
+- **飞书/Lark 消息渠道** — 新增飞书企业消息集成，支持 App ID/Secret 配置、WebSocket 连接、凭证在线校验，附官方教程链接
+- **openclaw.json 配置编辑器** — 服务管理页面新增配置文件直编功能，实时 JSON 语法校验，保存前自动备份，支持保存并重启 Gateway
+- **定时任务页面** — 注册到侧边栏和路由，通过 Gateway WebSocket RPC 直接管理 cron 任务（创建/编辑/删除/启停/手动触发）
+- **Docker 安装引导** — Docker 未连接时按操作系统（Windows/macOS/Linux）显示对应安装步骤和下载链接
+
+### 修复 (Fixes)
+
+- **#35 模型列表拉取崩溃** — 修复 Web 模式下 `_normalizeBaseUrl` 因 `this` 为 undefined 导致的 `Cannot read properties of undefined` 错误
+- **消息渠道 Web 模式后端缺失** — 补全 `dev-api.js` 中全部消息渠道 API（list/read/save/remove/toggle/verify），修复 Web/Docker 模式下消息渠道页面 404
+- **消息渠道弹窗溢出** — 接入步骤改为可折叠 `<details>`，modal 内容区域支持滚动
+- **定时任务侧边栏图标缺失** — 补充 clock SVG 到侧边栏图标映射
+
+### 改进 (Improvements)
+
+- **定时任务按钮交互** — toggle/delete 按钮添加 loading 状态反馈
+- **记忆模块切换动画** — Agent 切换和分类切换时显示骨架屏加载动画
+
 ## [0.7.3] - 2026-03-10
 
 ### 修复 (Fixes)
